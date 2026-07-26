@@ -108,16 +108,11 @@
   // grid, so the field costs a single call. Rendered as streamlines with an
   // animated dash rather than GPU particles: streamlines are ordinary line
   // layers, so they project correctly on the globe for free.
-  // Open-Meteo bills per *location*, not per request. The viewport grid is kept
-  // small because it is refetched as the view moves; the global field is much
-  // denser but cached for hours, since large-scale circulation changes slowly.
+  // Open-Meteo bills per *location*, not per request, so the viewport grid is
+  // kept small; it is refetched as the view moves. The globe uses NOAA GFS via
+  // Swift instead, which is free and far denser.
   var WIND_GRID_COLS = 14;
   var WIND_GRID_ROWS = 10;
-  var WIND_GLOBAL_COLS = 36;        // 10 degrees of longitude
-  var WIND_GLOBAL_ROWS = 15;        // 540 locations
-  var WIND_GLOBAL_TTL_MS = 2 * 3600 * 1000;
-  var WIND_CHUNK = 280;             // locations per request, to bound URL length
-  var WIND_GLOBAL_CACHE_KEY = 'wind-global-field';
   var WIND_PARTICLES = 1300;
   var WIND_TRAIL = 9;               // positions kept per particle
   var WIND_TICK_MS = 85;
@@ -597,6 +592,7 @@
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
           lastFeatureCount: windLastFeatureCount,
           lastError: windLastError,
+          source: windFieldSource,
           urlLength: windLastUrlLength,
           zoom: map.getZoom()
         };
@@ -604,7 +600,10 @@
           out.wind.field = {
             south: windField.south, west: windField.west,
             rows: windField.rows, cols: windField.cols,
-            sampleAtCenter: windField.sample(map.getCenter().lat, map.getCenter().lng)
+            centerLat: map.getCenter().lat,
+            centerLon: map.getCenter().lng,
+            sampleAtCenter: windField.sample(map.getCenter().lat, map.getCenter().lng),
+            sampleAtBerlin: windField.sample(52.5, 13.4)
           };
         }
         } catch (e) { out.windError = (e && e.message) || String(e); }
@@ -1302,6 +1301,7 @@
     var windTickInterval = null;
     var windLastFeatureCount = -1;
     var windLastError = null;
+    var windFieldSource = null;
     var windLastUrlLength = 0;
     var windFieldIsGlobal = false;
     var lastWindRequest = 0;
@@ -1455,15 +1455,6 @@
       });
     }
 
-    function readGlobalWindCache() {
-      try {
-        var raw = JSON.parse(localStorage.getItem(WIND_GLOBAL_CACHE_KEY));
-        if (!raw || Date.now() - raw.savedAt > WIND_GLOBAL_TTL_MS) return null;
-        if (!raw.u || raw.u.length !== raw.cols * raw.rows) return null;
-        return raw;
-      } catch (e) { return null; }
-    }
-
     function fetchWind(force) {
       if (!mapLoaded || appPaused || !windEnabled) return;
       if (!window.isPrimaryView) return;
@@ -1477,16 +1468,18 @@
       var isGlobal = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
 
       if (isGlobal) {
-        // Reuse a cached global field where possible: it costs 540 calls and
-        // the circulation it describes barely moves in a couple of hours.
-        var cached = readGlobalWindCache();
-        if (cached && !force) {
-          applyWindField(cached);
-          return;
-        }
-        south = -60; west = -180; north = 75; east = 180;
-        cols = WIND_GLOBAL_COLS; rows = WIND_GLOBAL_ROWS;
-      } else {
+        // The globe is served by NOAA GFS through Swift: a full 1-degree grid,
+        // free, and it never touches the Open-Meteo budget that the weather bar
+        // depends on. Swift caches it and answers via receiveWind.
+        try {
+          webkit.messageHandlers.dataRelay.postMessage({
+            type: 'requestGlobalWind', json: '{}'
+          });
+        } catch (e) { windLastError = (e && e.message) || String(e); }
+        return;
+      }
+
+      {
         // Sample a margin beyond the viewport so small pans don't immediately
         // fall outside the field and trigger another request.
         var b = map.getBounds();
@@ -1543,8 +1536,9 @@
     }
 
     window.receiveWind = function (raw) {
-      if (window.isPrimaryView) return;
       applyWindField(raw);
+      windLastError = null;
+      if (raw && raw.source) windFieldSource = raw.source;
     };
 
     // Particle positions are in geographic space, so a zoom change only alters

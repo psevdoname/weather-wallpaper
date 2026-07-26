@@ -11,7 +11,7 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 - **City Lights at Night** — NASA VIIRS Black Marble imagery, faded in by real solar elevation
 - **Day/Night Cycle** — real-time sun position with twilight and night overlays
 - **Weather Radar** — live precipitation overlay via RainViewer (no API key needed)
-- **Wind** — live 10m wind field from Open-Meteo, drawn as advected particles whose speed is the real wind speed (no API key needed)
+- **Wind** — live 10m wind advected as particles whose speed is the real wind speed. The globe uses NOAA GFS directly (1° global grid, decoded from GRIB2 in-app); zoomed in, Open-Meteo fills in local detail. No API key either way.
 - **Live Flights** — real-time aircraft positions from OpenSky Network
 - **Pollen & Air Quality** — Google Pollen API + Open-Meteo air quality data
 - **City Labels** — custom-styled country, state, city, and neighborhood labels
@@ -88,7 +88,8 @@ without the menu closing after each click:
 - [Mapbox GL JS](https://www.mapbox.com/) — 3D globe rendering
 - [OpenSky Network](https://opensky-network.org/) — live flight data (OAuth2 client credentials)
 - [RainViewer](https://www.rainviewer.com/api.html) — weather radar tiles (free, no key)
-- [Open-Meteo](https://open-meteo.com/) — air quality data (free, no key)
+- [Open-Meteo](https://open-meteo.com/) — weather, air quality and local wind (free, no key)
+- [NOAA GFS via NOMADS](https://nomads.ncep.noaa.gov/) — global wind field (free, no key)
 - [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) — VIIRS Black Marble city lights (free, no key)
 - [OpenWeatherMap](https://openweathermap.org/api/weathermaps) — global cloud and temperature tiles
 - [Google Pollen API](https://developers.google.com/maps/documentation/pollen) — pollen forecasts

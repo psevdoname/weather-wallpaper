@@ -13,6 +13,7 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
     private var pendingUnitSystem: String?
     private let processPool = WKProcessPool()
     let openSky = OpenSkyClient()
+    private let windService = WindService()
 
     private var screenSignature = ""
 
@@ -232,6 +233,18 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
             let path = NSString(string: "~/Library/Logs/WeatherWallpaper-debug.json").expandingTildeInPath
             try? jsonStr.write(toFile: path, atomically: true, encoding: .utf8)
             NSLog("[WeatherWallpaper] debug written to \(path)")
+            return
+        }
+
+        // The global wind field comes from NOAA GFS, which sends no CORS
+        // headers and ships GRIB2 — both reasons to fetch it natively.
+        if type == "requestGlobalWind" {
+            windService.field { [weak self] grid in
+                guard let grid, let payload = WindService.json(for: grid) else { return }
+                DispatchQueue.main.async {
+                    self?.evaluateOnAll("if (window.receiveWind) window.receiveWind(\(payload));")
+                }
+            }
             return
         }
 

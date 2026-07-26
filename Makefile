@@ -11,6 +11,8 @@ SWIFT_FILES = \
 	WeatherWallpaper/DesktopWindowManager.swift \
 	WeatherWallpaper/LocationManager.swift \
 	WeatherWallpaper/OpenSkyClient.swift \
+	WeatherWallpaper/GribDecoder.swift \
+	WeatherWallpaper/WindService.swift \
 	WeatherWallpaper/SettingsWindow.swift
 
 FRAMEWORKS = -framework Cocoa -framework WebKit -framework CoreLocation -framework ServiceManagement
