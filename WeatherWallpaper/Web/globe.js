@@ -578,9 +578,30 @@
           out.totalLayers = (style.layers || []).length;
         } catch (e) { out.styleError = e.message || String(e); }
         try {
+        out.wind = {
+          enabled: windEnabled,
+          hasField: !!windField,
+          fieldIsGlobal: windFieldIsGlobal,
+          particles: windParticles.length,
+          tickRunning: !!windTickInterval,
+          layerExists: !!map.getLayer('wind-layer'),
+          layerVisibility: map.getLayer('wind-layer')
+            ? map.getLayoutProperty('wind-layer', 'visibility') : null,
+          lastFeatureCount: windLastFeatureCount,
+          zoom: map.getZoom()
+        };
+        if (windField) {
+          out.wind.field = {
+            south: windField.south, west: windField.west,
+            rows: windField.rows, cols: windField.cols,
+            sampleAtCenter: windField.sample(map.getCenter().lat, map.getCenter().lng)
+          };
+        }
+        } catch (e) { out.windError = (e && e.message) || String(e); }
+        try {
           webkit.messageHandlers.dataRelay.postMessage({ type: 'debug', json: JSON.stringify(out, null, 2) });
         } catch (e) { }
-      }, 2500);
+      }, 6000);
     }
 
     function applyMapFeatures() {
@@ -1269,6 +1290,23 @@
     // calm air drifts — which a dash animation could never show.
     var windParticles = [];
     var windTickInterval = null;
+    var windLastFeatureCount = -1;
+    var windFieldIsGlobal = false;
+    var lastWindRequest = 0;
+    var WIND_REQUEST_MIN_MS = 45000;
+
+    // The field is sampled for whatever was on screen at the time, so after a
+    // zoom or pan it may no longer cover the view at all — in which case every
+    // particle falls outside the grid and nothing is drawn.
+    function windFieldCoversView() {
+      if (!windField) return false;
+      if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) return windFieldIsGlobal;
+      var b = map.getBounds();
+      var north = windField.south + windField.dLat * (windField.rows - 1);
+      var east = windField.west + windField.dLon * (windField.cols - 1);
+      return b.getSouth() >= windField.south && b.getNorth() <= north &&
+             b.getWest() >= windField.west && b.getEast() <= east;
+    }
 
     function seedParticle(p) {
         var north = windField.south + windField.dLat * (windField.rows - 1);
@@ -1319,6 +1357,7 @@
           });
         }
       }
+      windLastFeatureCount = features.length;
       map.getSource('wind').setData({ type: 'FeatureCollection', features: features });
     }
 

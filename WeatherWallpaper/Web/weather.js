@@ -1,6 +1,28 @@
 // --- Shared location ---
 var CACHE_KEY_PREFIX = 'weather-cache';
 var UNIT_SYSTEM_KEY = 'unit-system';
+var WIND_UNIT_KEY = 'wind-unit';
+
+// Wind speed is chosen independently of the temperature unit: plenty of people
+// want °C with m/s, which no single "metric" setting can express.
+var WIND_UNITS = {
+  auto: { api: null, label: null },
+  ms: { api: 'ms', label: 'm/s' },
+  kmh: { api: 'kmh', label: 'km/h' },
+  mph: { api: 'mph', label: 'mph' },
+  kn: { api: 'kn', label: 'kn' }
+};
+
+function getWindUnit() {
+  var stored = localStorage.getItem(WIND_UNIT_KEY);
+  return WIND_UNITS[stored] ? stored : 'auto';
+}
+
+function resolveWindUnit(unitSystem) {
+  var choice = getWindUnit();
+  if (choice === 'auto') return unitSystem === 'metric' ? WIND_UNITS.kmh : WIND_UNITS.mph;
+  return WIND_UNITS[choice];
+}
 var LAST_LOCATION_LAT_KEY = 'last-location-lat';
 var LAST_LOCATION_LON_KEY = 'last-location-lon';
 var POLLEN_KEY_STORAGE = 'google-pollen-api-key';
@@ -249,7 +271,7 @@ function render(data) {
 
   var unitSystem = normalizeUnitSystem(data.unitSystem || getUnitSystem());
   var tempUnit = unitSystem === 'metric' ? '°C' : '°F';
-  var windUnit = unitSystem === 'metric' ? 'km/h' : 'mph';
+  var windUnit = resolveWindUnit(unitSystem).label;
 
   var temp = current.temperature != null ? Math.round(current.temperature) : '--';
   document.getElementById('temperature').innerHTML = temp + '<span class="unit">' + tempUnit + '</span>';
@@ -297,7 +319,7 @@ async function fetchWeather(loc) {
 
   var unitSystem = getUnitSystem();
   var temperatureUnit = unitSystem === 'metric' ? 'celsius' : 'fahrenheit';
-  var windSpeedUnit = unitSystem === 'metric' ? 'kmh' : 'mph';
+  var windSpeedUnit = resolveWindUnit(unitSystem).api;
 
   var url = 'https://api.open-meteo.com/v1/forecast' +
     '?latitude=' + loc.lat +
@@ -487,6 +509,14 @@ window.receiveAllergy = function (data) {
 };
 
 window.reloadAllergy = loadAllergyData;
+
+window.setWindUnit = function (unit) {
+  localStorage.setItem(WIND_UNIT_KEY, WIND_UNITS[unit] ? unit : 'auto');
+  // The unit is applied by the API, so the reading has to be refetched.
+  fetchWeather(getLocation())
+    .then(render)
+    .catch(function (err) { console.error('Weather fetch failed:', err); });
+};
 
 window.setUnitSystem = function(unitSystem) {
   var normalized = setStoredUnitSystem(unitSystem);

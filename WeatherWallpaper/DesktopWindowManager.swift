@@ -198,6 +198,9 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         for name in ["labels", "boundaries", "roads", "roadGlow", "paths", "roadLabels", "poiLabels"] {
             lines.append("localStorage.setItem('feature-\(name)', '\(d.bool(forKey: "feature-\(name)") ? "1" : "0")');")
         }
+        if let windUnit = d.string(forKey: "wind-unit"), !windUnit.isEmpty {
+            lines.append("localStorage.setItem('wind-unit', '\(windUnit)');")
+        }
         if let color = d.string(forKey: "flight-color"), !color.isEmpty {
             lines.append("localStorage.setItem('flight-color', '\(color)');")
         }
@@ -358,6 +361,14 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         let js = """
         localStorage.setItem('feature-\(name)', '\(enabled ? "1" : "0")');
         if (window.setMapFeature) window.setMapFeature(\(quoteJS(name)), \(enabled));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectWindUnit(_ unit: String) {
+        let js = """
+        localStorage.setItem('wind-unit', \(quoteJS(unit)));
+        if (window.setWindUnit) window.setWindUnit(\(quoteJS(unit)));
         """
         evaluateOnAll(js)
     }

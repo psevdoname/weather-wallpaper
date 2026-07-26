@@ -49,6 +49,14 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("#E64DFF", "Magenta"),
     ]
 
+    private static let windUnits: [(id: String, name: String)] = [
+        ("auto", "Match units setting"),
+        ("ms", "m/s"),
+        ("kmh", "km/h"),
+        ("mph", "mph"),
+        ("kn", "knots"),
+    ]
+
     private static let spinSpeeds: [(value: Double, name: String)] = [
         (13, "Slow"), (26, "Normal"), (52, "Fast"),
     ]
@@ -99,6 +107,11 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             "Units", ["Imperial (°F, mph)", "Metric (°C, km/h)"],
             selected: (defaults.string(forKey: "unit-system") == "metric") ? 1 : 0,
             action: #selector(unitsChanged(_:))))
+
+        stack.addArrangedSubview(popupRow(
+            "Wind speed", Self.windUnits.map(\.name),
+            selected: Self.windUnits.firstIndex { $0.id == currentWindUnit } ?? 0,
+            action: #selector(windUnitChanged(_:))))
 
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(header("Map features"))
@@ -203,6 +216,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     // MARK: - Current values
 
     private var currentStyleId: String { defaults.string(forKey: "map-style") ?? "faded" }
+    private var currentWindUnit: String { defaults.string(forKey: "wind-unit") ?? "auto" }
+
     private var currentFlightColor: String { defaults.string(forKey: "flight-color") ?? "#C9A84C" }
 
     /// Defaults have to be registered lazily: a key absent from UserDefaults
@@ -227,6 +242,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         let on = sender.state == .on
         defaults.set(on, forKey: "feature-\(key)")
         manager.injectMapFeature(key, on)
+    }
+
+    @objc private func windUnitChanged(_ sender: NSPopUpButton) {
+        let id = Self.windUnits[sender.indexOfSelectedItem].id
+        defaults.set(id, forKey: "wind-unit")
+        manager.injectWindUnit(id)
     }
 
     @objc private func flightColorChanged(_ sender: NSPopUpButton) {

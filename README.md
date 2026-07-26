@@ -72,6 +72,7 @@ without the menu closing after each click:
 | Map features | Individual toggles: place names, borders, roads, road glow, pedestrian paths, road names, POIs |
 | Zoom | Eight levels from Globe to Block |
 | Units | Imperial or metric |
+| Wind speed | m/s, km/h, mph, knots, or match the units setting |
 | Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
 | Wind | Live 10m wind as moving particles |
