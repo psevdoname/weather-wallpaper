@@ -29,7 +29,9 @@
   --text: rgba(255,255,255,0.92);
   --text-mid: rgba(255,255,255,0.6);
   --text-dim: rgba(255,255,255,0.38);
-  --bar-bg: rgba(10, 10, 20, 0.35);
+  /* Opaque enough to stay readable without backdrop-filter: a blur() over a
+     moving map is recomputed every frame, which is what made the bar shimmer. */
+  --bar-bg: rgba(10, 10, 20, 0.72);
   --bar-border: rgba(255,255,255,0.1);
 }
 
@@ -135,8 +137,6 @@ body.has-webgl .orb { display: none; }
   gap: 7px;
   background: var(--bar-bg);
   border: 1px solid var(--bar-border);
-  backdrop-filter: blur(50px);
-  -webkit-backdrop-filter: blur(50px);
   border-radius: 100px;
   padding: 5px 14px;
   font-size: 12px;
@@ -187,13 +187,11 @@ body.has-webgl .orb { display: none; }
   color: var(--text-dim);
   cursor: default;
   pointer-events: none;
-  backdrop-filter: blur(50px);
-  -webkit-backdrop-filter: blur(50px);
 }
 .leaf-btn.active {
   color: var(--accent, #C9A84C);
   border-color: var(--accent, #C9A84C);
-  background: rgba(10, 10, 20, 0.45);
+  background: rgba(10, 10, 20, 0.8);
 }
 
 /* Bottom bar */
@@ -204,8 +202,6 @@ body.has-webgl .orb { display: none; }
   background: var(--bar-bg);
   border: 1px solid var(--bar-border);
   border-radius: 16px;
-  backdrop-filter: blur(50px);
-  -webkit-backdrop-filter: blur(50px);
   padding: 16px 28px;
   flex: 1;
   min-width: 0;
@@ -452,8 +448,6 @@ body.has-webgl .orb { display: none; }
   background: var(--bar-bg);
   border: 1px solid var(--bar-border);
   border-radius: 14px;
-  backdrop-filter: blur(50px);
-  -webkit-backdrop-filter: blur(50px);
   padding: 16px 18px;
   pointer-events: none;
   opacity: 0;

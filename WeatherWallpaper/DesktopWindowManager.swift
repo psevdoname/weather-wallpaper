@@ -12,9 +12,28 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
     private var pendingPollenKey: String?
     private var pendingUnitSystem: String?
     private let processPool = WKProcessPool()
+    let openSky = OpenSkyClient()
+
+    private var screenSignature = ""
 
     func setupWindows() {
+        screenSignature = Self.currentScreenSignature()
         createWindowsForAllScreens()
+    }
+
+    private static func currentScreenSignature() -> String {
+        NSScreen.screens.map { NSStringFromRect($0.frame) }.joined(separator: "|")
+    }
+
+    /// `didChangeScreenParametersNotification` also fires when switching Spaces,
+    /// and a rebuild reloads every WebView — which burns a Mapbox map load per
+    /// screen and drops all in-page state. Only rebuild when the screen layout
+    /// genuinely changed.
+    func rebuildWindowsIfNeeded() {
+        let signature = Self.currentScreenSignature()
+        guard signature != screenSignature || windows.isEmpty else { return }
+        screenSignature = signature
+        rebuildWindows()
     }
 
     func rebuildWindows() {
@@ -124,6 +143,15 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
             config.userContentController.addUserScript(script)
         }
 
+        // Inject every persisted toggle before page load, so a reload or a
+        // window rebuild restores the exact same view.
+        let settingsScript = WKUserScript(
+            source: Self.settingsBootstrapJS(),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(settingsScript)
+
         // Inject saved location before page load
         if let loc = pendingLocation ?? persistedLocation() {
             let script = WKUserScript(
@@ -143,6 +171,29 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         return (window, webView)
     }
 
+    /// Keys here must match the ones globe.js reads on startup.
+    private static func settingsBootstrapJS() -> String {
+        let d = UserDefaults.standard
+        let bools = [
+            "flights-enabled", "radar-enabled",
+            "spin-enabled", "pollen-enabled", "night-lights"
+        ]
+        var lines = bools.map { key -> String in
+            "localStorage.setItem('\(key)', '\(d.bool(forKey: key) ? "1" : "0")');"
+        }
+        if let style = d.string(forKey: "map-style"), !style.isEmpty {
+            lines.append("localStorage.setItem('map-style', '\(style)');")
+        }
+        if let detail = d.string(forKey: "map-detail"), !detail.isEmpty {
+            lines.append("localStorage.setItem('map-detail', '\(detail)');")
+        }
+        let zoom = d.object(forKey: "zoom-level") as? Double ?? 2.5
+        lines.append("localStorage.setItem('zoom-level', '\(zoom)');")
+        let spin = d.object(forKey: "spin-speed") as? Double ?? 26
+        lines.append("localStorage.setItem('spin-speed', '\(spin)');")
+        return lines.joined(separator: "\n")
+    }
+
     private func loadContent(in webView: WKWebView) {
         guard let resourceURL = Bundle.main.resourceURL else { return }
         let webDir = resourceURL.appendingPathComponent("Web")
@@ -158,6 +209,22 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
               let body = message.body as? [String: Any],
               let type = body["type"] as? String,
               let jsonStr = body["json"] as? String else { return }
+
+        // Flights are fetched natively (CORS blocks the WebView) and pushed to
+        // every view when they arrive.
+        if type == "requestFlights" {
+            guard let data = jsonStr.data(using: .utf8),
+                  let b = try? JSONSerialization.jsonObject(with: data) as? [String: Double],
+                  let south = b["south"], let west = b["west"],
+                  let north = b["north"], let east = b["east"] else { return }
+            openSky.fetchStates(south: south, west: west, north: north, east: east) { [weak self] payload in
+                guard let payload else { return }
+                DispatchQueue.main.async {
+                    self?.evaluateOnAll("if (window.receiveFlights) window.receiveFlights(\(payload));")
+                }
+            }
+            return
+        }
 
         // Broadcast to all webviews (primary will receive too, but receivers are idempotent)
         let js: String
@@ -242,8 +309,32 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         evaluateOnAll(js)
     }
 
-    func injectLabelsToggle(_ enabled: Bool) {
-        let js = "if (window.setLabelsEnabled) window.setLabelsEnabled(\(enabled));"
+    func injectMapDetail(_ level: String) {
+        let js = """
+        localStorage.setItem('map-detail', \(quoteJS(level)));
+        if (window.setMapDetail) window.setMapDetail(\(quoteJS(level)));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectSpinSpeed(_ pixelsPerSecond: Double) {
+        let js = """
+        localStorage.setItem('spin-speed', '\(pixelsPerSecond)');
+        if (window.setSpinSpeed) window.setSpinSpeed(\(pixelsPerSecond));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectMapStyle(_ id: String) {
+        let js = """
+        localStorage.setItem('map-style', \(quoteJS(id)));
+        if (window.setMapStyle) window.setMapStyle(\(quoteJS(id)));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectNightLightsToggle(_ enabled: Bool) {
+        let js = "if (window.setNightLightsEnabled) window.setNightLightsEnabled(\(enabled));"
         evaluateOnAll(js)
     }
 
