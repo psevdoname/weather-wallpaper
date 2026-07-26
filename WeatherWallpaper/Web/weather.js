@@ -59,6 +59,39 @@ window.setAppPaused = function (paused) {
   }
 };
 
+var weatherRetryTimer = null;
+var WEATHER_RETRY_MS = 2 * 60 * 1000;
+
+// Open-Meteo answers 429 once its hourly budget is spent, and that budget is
+// shared with the wind field. Say so plainly instead of sitting on "Loading…"
+// forever, and keep retrying so the bar recovers on its own.
+function showWeatherUnavailable(err, hadCache) {
+  var rateLimited = /429/.test((err && err.message) || '');
+  var message = rateLimited ? 'Rate limited — retrying' : 'Unable to load weather';
+  if (!hadCache) {
+    var condition = document.getElementById('condition');
+    if (condition) condition.textContent = message;
+    var forecast = document.getElementById('forecast');
+    if (forecast && forecast.querySelector('.bar-loading')) {
+      forecast.innerHTML = '<span class="bar-loading">' + message + '</span>';
+    }
+  }
+}
+
+function scheduleWeatherRetry(loc) {
+  if (weatherRetryTimer) return;
+  weatherRetryTimer = setTimeout(function () {
+    weatherRetryTimer = null;
+    if (appPaused || !window.isPrimaryView) return;
+    fetchWeather(loc)
+      .then(function (data) { if (data) render(data); })
+      .catch(function (err) {
+        showWeatherUnavailable(err, false);
+        scheduleWeatherRetry(loc);
+      });
+  }, WEATHER_RETRY_MS);
+}
+
 function normalizeUnitSystem(unitSystem) {
   return unitSystem === 'metric' ? 'metric' : 'imperial';
 }
@@ -596,7 +629,8 @@ window.addEventListener('locationUpdated', async function (e) {
     if (data) render(data);
   } catch (err) {
     console.error('Weather fetch failed:', err);
-    if (!cached) document.getElementById('condition').textContent = 'Unable to load weather';
+    showWeatherUnavailable(err, !!cached);
+    scheduleWeatherRetry(loc);
   }
 
   // Auto-refresh weather every 15 minutes
