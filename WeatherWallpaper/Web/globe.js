@@ -108,11 +108,16 @@
   // grid, so the field costs a single call. Rendered as streamlines with an
   // animated dash rather than GPU particles: streamlines are ordinary line
   // layers, so they project correctly on the globe for free.
-  // Open-Meteo bills per *location*, not per request: a 20x15 grid costs 300
-  // calls against a 5000/hour budget, which a few zoom changes exhausted.
-  // 14x10 keeps a single request at 140 calls.
+  // Open-Meteo bills per *location*, not per request. The viewport grid is kept
+  // small because it is refetched as the view moves; the global field is much
+  // denser but cached for hours, since large-scale circulation changes slowly.
   var WIND_GRID_COLS = 14;
   var WIND_GRID_ROWS = 10;
+  var WIND_GLOBAL_COLS = 36;        // 10 degrees of longitude
+  var WIND_GLOBAL_ROWS = 15;        // 540 locations
+  var WIND_GLOBAL_TTL_MS = 2 * 3600 * 1000;
+  var WIND_CHUNK = 280;             // locations per request, to bound URL length
+  var WIND_GLOBAL_CACHE_KEY = 'wind-global-field';
   var WIND_PARTICLES = 1300;
   var WIND_TRAIL = 9;               // positions kept per particle
   var WIND_TICK_MS = 85;
@@ -1411,6 +1416,54 @@
       windParticles = [];
     }
 
+    // Open-Meteo takes comma-separated coordinates, but a 540-point URL would
+    // run past what is safe to send, so the grid is split across requests.
+    function requestWindGrid(lats, lons) {
+      var chunks = [];
+      for (var start = 0; start < lats.length; start += WIND_CHUNK) {
+        chunks.push([lats.slice(start, start + WIND_CHUNK),
+                     lons.slice(start, start + WIND_CHUNK)]);
+      }
+      return Promise.all(chunks.map(function (chunk) {
+        var url = 'https://api.open-meteo.com/v1/forecast' +
+          '?latitude=' + chunk[0].join(',') +
+          '&longitude=' + chunk[1].join(',') +
+          '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms';
+        windLastUrlLength = Math.max(windLastUrlLength, url.length);
+        return fetch(url).then(function (res) {
+          if (res.status === 429) {
+            windBackoffUntil = Date.now() + WIND_BACKOFF_MS;
+            throw new Error('HTTP 429 (backing off)');
+          }
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        });
+      })).then(function (responses) {
+        var u = [], v = [];
+        responses.forEach(function (data) {
+          var list = Array.isArray(data) ? data : [data];
+          list.forEach(function (entry) {
+            var cur = entry && entry.current;
+            var c = windComponents(
+              (cur && cur.wind_speed_10m) || 0,
+              (cur && cur.wind_direction_10m) || 0
+            );
+            u.push(c.u); v.push(c.v);
+          });
+        });
+        return { u: u, v: v };
+      });
+    }
+
+    function readGlobalWindCache() {
+      try {
+        var raw = JSON.parse(localStorage.getItem(WIND_GLOBAL_CACHE_KEY));
+        if (!raw || Date.now() - raw.savedAt > WIND_GLOBAL_TTL_MS) return null;
+        if (!raw.u || raw.u.length !== raw.cols * raw.rows) return null;
+        return raw;
+      } catch (e) { return null; }
+    }
+
     function fetchWind(force) {
       if (!mapLoaded || appPaused || !windEnabled) return;
       if (!window.isPrimaryView) return;
@@ -1420,10 +1473,19 @@
       if (!force && now - lastWindRequest < WIND_REQUEST_MIN_MS) return;
       lastWindRequest = now;
 
-      var south, west, north, east;
+      var south, west, north, east, cols, rows;
       var isGlobal = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
+
       if (isGlobal) {
+        // Reuse a cached global field where possible: it costs 540 calls and
+        // the circulation it describes barely moves in a couple of hours.
+        var cached = readGlobalWindCache();
+        if (cached && !force) {
+          applyWindField(cached);
+          return;
+        }
         south = -60; west = -180; north = 75; east = 180;
+        cols = WIND_GLOBAL_COLS; rows = WIND_GLOBAL_ROWS;
       } else {
         // Sample a margin beyond the viewport so small pans don't immediately
         // fall outside the field and trigger another request.
@@ -1434,59 +1496,34 @@
         north = Math.min(85, b.getNorth() + padLat);
         west = b.getWest() - padLon;
         east = b.getEast() + padLon;
+        cols = WIND_GRID_COLS; rows = WIND_GRID_ROWS;
       }
 
       var lats = [], lons = [];
-      for (var row = 0; row < WIND_GRID_ROWS; row++) {
-        for (var col = 0; col < WIND_GRID_COLS; col++) {
-          lats.push((south + (north - south) * row / (WIND_GRID_ROWS - 1)).toFixed(3));
-          lons.push((west + (east - west) * col / (WIND_GRID_COLS - 1)).toFixed(3));
+      for (var row = 0; row < rows; row++) {
+        for (var col = 0; col < cols; col++) {
+          lats.push((south + (north - south) * row / (rows - 1)).toFixed(3));
+          lons.push((west + (east - west) * col / (cols - 1)).toFixed(3));
         }
       }
 
-      var url = 'https://api.open-meteo.com/v1/forecast' +
-        '?latitude=' + lats.join(',') +
-        '&longitude=' + lons.join(',') +
-        '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms';
-
-      windLastUrlLength = url.length;
-      fetch(url)
-        .then(function (res) {
-          if (res.status === 429) {
-            // Rate limited: stop asking for a while rather than hammering.
-            windBackoffUntil = Date.now() + WIND_BACKOFF_MS;
-            throw new Error('HTTP 429 (backing off)');
-          }
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
-        })
-        .then(function (data) {
-          var list = Array.isArray(data) ? data : [data];
-          var u = new Float32Array(list.length);
-          var v = new Float32Array(list.length);
-          for (var i = 0; i < list.length; i++) {
-            var cur = list[i] && list[i].current;
-            var c = windComponents(
-              (cur && cur.wind_speed_10m) || 0,
-              (cur && cur.wind_direction_10m) || 0
-            );
-            u[i] = c.u; v[i] = c.v;
-          }
-          applyWindField({
+      requestWindGrid(lats, lons)
+        .then(function (result) {
+          var field = {
             south: south, west: west, north: north, east: east,
-            global: isGlobal,
-            cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
-            u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
-          });
+            global: isGlobal, cols: cols, rows: rows,
+            u: result.u, v: result.v
+          };
+          applyWindField(field);
+          windLastError = null;
+
+          if (isGlobal) {
+            field.savedAt = Date.now();
+            try { localStorage.setItem(WIND_GLOBAL_CACHE_KEY, JSON.stringify(field)); } catch (e) { }
+          }
           try {
             webkit.messageHandlers.dataRelay.postMessage({
-              type: 'wind',
-              json: JSON.stringify({
-                south: south, west: west, north: north, east: east,
-                global: isGlobal,
-                cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
-                u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
-              })
+              type: 'wind', json: JSON.stringify(field)
             });
           } catch (e) { }
         })
