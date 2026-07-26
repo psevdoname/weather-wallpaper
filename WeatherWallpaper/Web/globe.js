@@ -110,12 +110,13 @@
   // layers, so they project correctly on the globe for free.
   var WIND_GRID_COLS = 20;
   var WIND_GRID_ROWS = 15;          // 300 points, ~0.2s per request
-  var WIND_STREAMLINES = 420;
-  var WIND_STEPS = 18;
-  var WIND_TARGET_PX = 70;          // on-screen length drawn by a typical wind
-  var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field,
-                                    // so most streamlines land near the target
-                                    // and gales visibly run longer
+  var WIND_PARTICLES = 800;
+  var WIND_TRAIL = 9;               // positions kept per particle
+  var WIND_TICK_MS = 80;
+  var WIND_MAX_AGE = 110;           // ticks before a particle is reseeded, so
+                                    // they don't all pile into convergence zones
+  var WIND_PX_PER_SEC = 45;         // on-screen speed of a reference wind
+  var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field
   var METERS_PER_DEGREE = 111320;
 
   var mapContainer = document.getElementById('globe-map');
@@ -321,43 +322,6 @@
     return { u: -speed * Math.sin(rad), v: -speed * Math.cos(rad) };
   }
 
-  // Integrates streamlines through the field, seeded at random points.
-  // stepSeconds is chosen by the caller so a typical wind draws a line of
-  // roughly constant on-screen length whatever the zoom.
-  function buildStreamlines(field, count, steps, stepSeconds) {
-    var features = [];
-    var north = field.south + field.dLat * (field.rows - 1);
-    var east = field.west + field.dLon * (field.cols - 1);
-
-    for (var n = 0; n < count; n++) {
-      var lat = field.south + Math.random() * (north - field.south);
-      var lon = field.west + Math.random() * (east - field.west);
-      var coords = [];
-      var speedSum = 0;
-
-      for (var s = 0; s < steps; s++) {
-        var w = field.sample(lat, lon);
-        if (!w) break;
-        coords.push([lon, lat]);
-        speedSum += Math.sqrt(w.u * w.u + w.v * w.v);
-
-        var cosLat = Math.cos(lat * DEG);
-        if (cosLat < 0.05) break;   // degenerate near the poles
-        lat += (w.v * stepSeconds) / METERS_PER_DEGREE;
-        lon += (w.u * stepSeconds) / (METERS_PER_DEGREE * cosLat);
-        if (lat > 89 || lat < -89) break;
-      }
-
-      if (coords.length < 3) continue;
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: coords },
-        properties: { speed: speedSum / coords.length }
-      });
-    }
-    return { type: 'FeatureCollection', features: features };
-  }
-
   function initMap(accessToken) {
     mapboxgl.workerUrl = 'mapbox-gl-csp-worker.js';
     mapboxgl.accessToken = accessToken;
@@ -441,6 +405,7 @@
     map.on('style.load', function () {
       applyStyleConfig();
       try { map.setProjection('globe'); } catch (e) { }
+      reportStyleDiagnostics();
       addCustomLayers();
       reapplyToggles();
       applyNightBlend();
@@ -590,6 +555,32 @@
         if (exceptId && layer.id === exceptId) continue;
         setVisible(layer.id, visible);
       }
+    }
+
+    // One-shot dump of what the loaded style actually exposes, so the boundary
+    // and road controls can be verified instead of guessed at.
+    function reportStyleDiagnostics() {
+      if (!window.isPrimaryView) return;
+      setTimeout(function () {
+        var out = { style: currentStyle.id, config: {}, adminLayers: [], roadLayers: [], imports: null };
+        ['showAdminBoundaries', 'showRoadsAndTransit', 'showPedestrianRoads',
+         'colorAdminBoundaries', 'colorRoads', 'colorLand', 'theme'].forEach(function (name) {
+          try { out.config[name] = map.getConfigProperty('basemap', name); }
+          catch (e) { out.config[name] = 'ERROR: ' + (e.message || e); }
+        });
+        try {
+          var style = map.getStyle();
+          out.imports = (style.imports || []).map(function (i) { return i.id; });
+          (style.layers || []).forEach(function (l) {
+            if (l['source-layer'] === 'admin') out.adminLayers.push(l.id);
+            if (l['source-layer'] === 'road') out.roadLayers.push(l.id);
+          });
+          out.totalLayers = (style.layers || []).length;
+        } catch (e) { out.styleError = e.message || String(e); }
+        try {
+          webkit.messageHandlers.dataRelay.postMessage({ type: 'debug', json: JSON.stringify(out, null, 2) });
+        } catch (e) { }
+      }, 2500);
     }
 
     function applyMapFeatures() {
@@ -997,8 +988,8 @@
               8, 'rgba(195,230,255,0.65)',
               18, 'rgba(255,240,205,0.9)'
             ],
-            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.9, 6, 1.3, 10, 2],
-            'line-dasharray': WIND_DASH_SEQUENCE[0]
+            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.1, 6, 1.5, 10, 2.2],
+            'line-opacity': 0.85
           }
         });
       }
@@ -1273,47 +1264,72 @@
 
     // --- Wind (Open-Meteo, primary view only) ---
 
-    // Mapbox's canonical dash-offset cycle; stepping through it makes the
-    // streamlines appear to flow along their own direction.
-    var WIND_DASH_SEQUENCE = [
-      [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5], [2, 4, 1],
-      [2.5, 4, 0.5], [3, 4, 0], [0, 0.5, 3, 3.5], [0, 1, 3, 3],
-      [0, 1.5, 3, 2.5], [0, 2, 3, 2], [0, 2.5, 3, 1.5], [0, 3, 3, 1],
-      [0, 3.5, 3, 0.5]
-    ];
-    var windDashStep = 0;
-    var windDashInterval = null;
-    var windZoomAtBuild = null;
-    var windFieldIsGlobal = false;
-    var lastWindRequest = 0;
-    var WIND_REQUEST_MIN_MS = 45000;
+    // Particles advected through the field. Their speed is the real wind
+    // speed, mapped to a constant on-screen scale, so gales visibly race and
+    // calm air drifts — which a dash animation could never show.
+    var windParticles = [];
+    var windTickInterval = null;
 
-    // The field is sampled for whatever was on screen at the time, so after a
-    // zoom or pan it may no longer cover the view at all — in which case every
-    // seed falls outside the grid and no streamlines are produced.
-    function windFieldCoversView() {
-      if (!windField) return false;
-      if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) return windFieldIsGlobal;
-      var b = map.getBounds();
-      var north = windField.south + windField.dLat * (windField.rows - 1);
-      var east = windField.west + windField.dLon * (windField.cols - 1);
-      return b.getSouth() >= windField.south && b.getNorth() <= north &&
-             b.getWest() >= windField.west && b.getEast() <= east;
+    function seedParticle(p) {
+        var north = windField.south + windField.dLat * (windField.rows - 1);
+        var east = windField.west + windField.dLon * (windField.cols - 1);
+        p.lat = windField.south + Math.random() * (north - windField.south);
+        p.lon = windField.west + Math.random() * (east - windField.west);
+        p.trail = [];
+        p.age = Math.floor(Math.random() * WIND_MAX_AGE);
+        p.speed = 0;
+    }
+
+    function windTick() {
+      if (appPaused || !windEnabled || !windField || !map.getSource('wind')) return;
+
+      while (windParticles.length < WIND_PARTICLES) {
+        var fresh = {};
+        seedParticle(fresh);
+        windParticles.push(fresh);
+      }
+
+      // Seconds of simulated time per tick, chosen so a reference wind travels
+      // WIND_PX_PER_SEC on screen regardless of zoom.
+      var pixelsPerDegree = 512 * Math.pow(2, map.getZoom()) / 360;
+      var timeScale = WIND_PX_PER_SEC * METERS_PER_DEGREE /
+                      (WIND_REFERENCE_SPEED * pixelsPerDegree);
+      var dt = (WIND_TICK_MS / 1000) * timeScale;
+
+      var features = [];
+      for (var i = 0; i < windParticles.length; i++) {
+        var p = windParticles[i];
+        var w = windField.sample(p.lat, p.lon);
+        var cosLat = Math.cos(p.lat * DEG);
+        if (!w || p.age > WIND_MAX_AGE || cosLat < 0.05) { seedParticle(p); continue; }
+
+        p.trail.push([p.lon, p.lat]);
+        if (p.trail.length > WIND_TRAIL) p.trail.shift();
+
+        p.speed = Math.sqrt(w.u * w.u + w.v * w.v);
+        p.lat += (w.v * dt) / METERS_PER_DEGREE;
+        p.lon += (w.u * dt) / (METERS_PER_DEGREE * cosLat);
+        p.age++;
+
+        if (p.trail.length > 1) {
+          features.push({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: p.trail.slice() },
+            properties: { speed: p.speed }
+          });
+        }
+      }
+      map.getSource('wind').setData({ type: 'FeatureCollection', features: features });
     }
 
     function startWindAnimation() {
-      if (windDashInterval) return;
-      windDashInterval = setInterval(function () {
-        if (appPaused || !windEnabled || !map.getLayer('wind-layer')) return;
-        windDashStep = (windDashStep + 1) % WIND_DASH_SEQUENCE.length;
-        try {
-          map.setPaintProperty('wind-layer', 'line-dasharray', WIND_DASH_SEQUENCE[windDashStep]);
-        } catch (e) { }
-      }, 80);
+      if (windTickInterval) return;
+      windTickInterval = setInterval(windTick, WIND_TICK_MS);
     }
 
     function stopWindAnimation() {
-      if (windDashInterval) { clearInterval(windDashInterval); windDashInterval = null; }
+      if (windTickInterval) { clearInterval(windTickInterval); windTickInterval = null; }
+      windParticles = [];
     }
 
     function fetchWind(force) {
@@ -1405,19 +1421,12 @@
       applyWindField(raw);
     };
 
+    // Particle positions are in geographic space, so a zoom change only alters
+    // how fast they should appear to move; the trails are reseeded so they
+    // don't keep a stale on-screen length.
     function rebuildStreamlines() {
-      if (!windField || !map.getSource('wind')) return;
-      // Pick the integration step so a WIND_REFERENCE_SPEED wind draws roughly
-      // WIND_TARGET_PX of line, whatever the zoom.
-      var pixelsPerDegree = 512 * Math.pow(2, map.getZoom()) / 360;
-      var targetDegrees = WIND_TARGET_PX / pixelsPerDegree;
-      var stepSeconds =
-        (targetDegrees * METERS_PER_DEGREE / WIND_REFERENCE_SPEED) / WIND_STEPS;
-
       windZoomAtBuild = map.getZoom();
-      map.getSource('wind').setData(
-        buildStreamlines(windField, WIND_STREAMLINES, WIND_STEPS, stepSeconds)
-      );
+      for (var i = 0; i < windParticles.length; i++) seedParticle(windParticles[i]);
     }
 
     window.setWindEnabled = function (on) {

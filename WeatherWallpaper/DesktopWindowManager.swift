@@ -224,6 +224,14 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
               let type = body["type"] as? String,
               let jsonStr = body["json"] as? String else { return }
 
+        // Diagnostics from the page, written where the developer can read them.
+        if type == "debug" {
+            let path = NSString(string: "~/Library/Logs/WeatherWallpaper-debug.json").expandingTildeInPath
+            try? jsonStr.write(toFile: path, atomically: true, encoding: .utf8)
+            NSLog("[WeatherWallpaper] debug written to \(path)")
+            return
+        }
+
         // Flights are fetched natively (CORS blocks the WebView) and pushed to
         // every view when they arrive.
         if type == "requestFlights" {

@@ -11,7 +11,7 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 - **City Lights at Night** — NASA VIIRS Black Marble imagery, faded in by real solar elevation
 - **Day/Night Cycle** — real-time sun position with twilight and night overlays
 - **Weather Radar** — live precipitation overlay via RainViewer (no API key needed)
-- **Wind** — live 10m wind field from Open-Meteo, drawn as animated streamlines (no API key needed)
+- **Wind** — live 10m wind field from Open-Meteo, drawn as advected particles whose speed is the real wind speed (no API key needed)
 - **Live Flights** — real-time aircraft positions from OpenSky Network
 - **Pollen & Air Quality** — Google Pollen API + Open-Meteo air quality data
 - **City Labels** — custom-styled country, state, city, and neighborhood labels
@@ -74,7 +74,7 @@ without the menu closing after each click:
 | Units | Imperial or metric |
 | Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
-| Wind | Live 10m wind as animated streamlines |
+| Wind | Live 10m wind as moving particles |
 | Clouds / Temperature | Global overlays (needs an OpenWeather key) |
 | City lights at night | NASA Black Marble on the night side |
 | Pollen & air quality | Bottom bar switches to the allergy view |
