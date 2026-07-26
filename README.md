@@ -7,7 +7,7 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 ## Features
 
 - **3D Globe** — rendered as your desktop wallpaper
-- **Map Styles** — eight switchable styles, including cloudless Sentinel-2 satellite imagery
+- **Map Styles** — seven switchable basemap styles
 - **City Lights at Night** — NASA VIIRS Black Marble imagery, faded in by real solar elevation
 - **Day/Night Cycle** — real-time sun position with twilight and night overlays
 - **Weather Radar** — live precipitation overlay via RainViewer (no API key needed)
@@ -25,6 +25,7 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 - macOS 13.0+
 - A free [Mapbox access token](https://account.mapbox.com/access-tokens/) (required)
 - [OpenSky API client credentials](https://opensky-network.org/my-opensky/account) (optional, for flights — anonymous access is heavily rate limited since OpenSky moved to OAuth2 in March 2026)
+- An [OpenWeatherMap API key](https://openweathermap.org/api) (optional, for global cloud and temperature overlays — free tier; a new key can take up to two hours to activate)
 - A [Google Pollen API key](https://console.cloud.google.com/) (optional, for pollen data)
 
 Map styles, city lights, weather radar and air quality need no key at all.
@@ -57,20 +58,29 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 |------|-------------|
 | Refresh Location | Re-detect current location via GPS |
 | Search Location… | Geocode a city/place and fly there |
-| Set Mapbox Token… | Enter your Mapbox public token |
-| Set Pollen API Key… | Enter your Google Pollen API key |
-| Set OpenSky Credentials… | Import the `credentials.json` from your OpenSky API client |
-| Map Style | Pick one of eight basemap styles (radio select) |
-| Zoom: Globe / Country / City / Street | Change zoom level (radio select) |
-| Show Flights | Toggle live flight tracking |
-| Show Weather Radar | Toggle precipitation overlay |
-| Show Wind | Live 10m wind as animated streamlines |
-| Show Pollen & Air Quality | Toggle bottom bar to allergy view |
-| Show City Lights at Night | Fade in NASA Black Marble imagery on the night side |
-| Detail | How much is drawn on top of the geography: None / Minimal / Normal / Full (roads included) |
-| Spin Globe | Smooth auto-rotation |
-| Spin Speed | Slow / Normal / Fast — constant on-screen speed at any zoom |
-| Launch at Login | Start on boot |
+| Settings… | Open the settings window |
+| Refresh Location | Re-detect current location via GPS |
+| Search Location… | Geocode a city/place and fly there |
+| Quit Weather Wallpaper | Quit |
+
+Everything else lives in the settings window, so several options can be changed
+without the menu closing after each click:
+
+| Setting | Description |
+|---------|-------------|
+| Map style | One of seven basemaps |
+| Detail | How much is drawn over the geography: None / Minimal / Normal / Full (roads included) |
+| Zoom | Globe / Country / City / Street |
+| Units | Imperial or metric |
+| Flights | Live aircraft positions |
+| Weather radar | Precipitation overlay (RainViewer) |
+| Wind | Live 10m wind as animated streamlines |
+| Clouds / Temperature | Global overlays (needs an OpenWeather key) |
+| City lights at night | NASA Black Marble on the night side |
+| Pollen & air quality | Bottom bar switches to the allergy view |
+| Spin globe / Spin speed | Auto-rotation, constant on-screen speed at any zoom |
+| Keys | Mapbox token, OpenWeather key, OpenSky credentials, Pollen key |
+| Launch at login | Start on boot |
 
 ## APIs Used
 
@@ -79,14 +89,10 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 - [RainViewer](https://www.rainviewer.com/api.html) — weather radar tiles (free, no key)
 - [Open-Meteo](https://open-meteo.com/) — air quality data (free, no key)
 - [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) — VIIRS Black Marble city lights (free, no key)
-- [Sentinel-2 cloudless](https://s2maps.eu) — cloudless satellite basemap (free, no key)
+- [OpenWeatherMap](https://openweathermap.org/api/weathermaps) — global cloud and temperature tiles
 - [Google Pollen API](https://developers.google.com/maps/documentation/pollen) — pollen forecasts
 
 ## Attribution
-
-The **Satellite · Cloudless** style uses [Sentinel-2 cloudless 2020](https://s2maps.eu) by
-EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2020), which is free for
-non-commercial use with attribution.
 
 City lights imagery courtesy of NASA Worldview / GIBS, part of the NASA Earth Observing
 System Data and Information System (EOSDIS).

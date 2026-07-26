@@ -10,7 +10,8 @@ SWIFT_FILES = \
 	WeatherWallpaper/AppDelegate.swift \
 	WeatherWallpaper/DesktopWindowManager.swift \
 	WeatherWallpaper/LocationManager.swift \
-	WeatherWallpaper/OpenSkyClient.swift
+	WeatherWallpaper/OpenSkyClient.swift \
+	WeatherWallpaper/SettingsWindow.swift
 
 FRAMEWORKS = -framework Cocoa -framework WebKit -framework CoreLocation -framework ServiceManagement
 SWIFT_FLAGS = -target arm64-apple-macosx13.0

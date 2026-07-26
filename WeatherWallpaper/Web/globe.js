@@ -18,35 +18,6 @@
 
   // ==================== MAP STYLES ====================
 
-  var GLYPHS = 'mapbox://fonts/mapbox/{fontstack}/{range}.pbf';
-
-  // Raster-only styles need their own minimal style document. Glyphs are
-  // required or the custom symbol (label) layers silently fail to render.
-  function rasterStyle(tileUrl, maxzoom, attribution, background) {
-    return {
-      version: 8,
-      glyphs: GLYPHS,
-      sources: {
-        'basemap-raster': {
-          type: 'raster',
-          tiles: [tileUrl],
-          tileSize: 256,
-          maxzoom: maxzoom,
-          attribution: attribution
-        }
-      },
-      layers: [
-        { id: 'background', type: 'background', paint: { 'background-color': background } },
-        { id: 'basemap-raster-layer', type: 'raster', source: 'basemap-raster' }
-      ]
-    };
-  }
-
-  var S2CLOUDLESS_TILES =
-    'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg';
-  var S2CLOUDLESS_ATTRIB =
-    'Sentinel-2 cloudless 2020 by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2020)';
-
   // labelColor / haloColor / haloWidth style the custom place-label layers,
   // which have to stay legible across light, dark and imagery basemaps.
   var STYLES = [
@@ -77,12 +48,6 @@
     {
       id: 'satellite', name: 'Satellite',
       url: 'mapbox://styles/mapbox/standard-satellite',
-      config: {},
-      labelColor: 'rgba(255,255,255,0.85)', haloColor: 'rgba(0,0,0,0.65)', haloWidth: 1
-    },
-    {
-      id: 's2cloudless', name: 'Satellite · Cloudless',
-      style: rasterStyle(S2CLOUDLESS_TILES, 14, S2CLOUDLESS_ATTRIB, '#050810'),
       config: {},
       labelColor: 'rgba(255,255,255,0.85)', haloColor: 'rgba(0,0,0,0.65)', haloWidth: 1
     },
@@ -128,6 +93,15 @@
     [-180, MERCATOR_MAX_LAT], [180, MERCATOR_MAX_LAT],
     [180, -MERCATOR_MAX_LAT], [-180, -MERCATOR_MAX_LAT]
   ];
+
+  // ==================== OPENWEATHERMAP OVERLAYS ====================
+  // Global cloud and temperature tiles. Unlike the GOES/Himawari imagery on
+  // NASA GIBS these cover Europe and Africa too. Free tier, one key.
+  // The weather-map tiles are only produced up to z9.
+  var OWM_MAXZOOM = 9;
+  function owmTiles(layer, key) {
+    return 'https://tile.openweathermap.org/map/' + layer + '/{z}/{x}/{y}.png?appid=' + key;
+  }
 
   // ==================== WIND ====================
   // Live 10m wind from Open-Meteo (free, no key). One request returns the whole
@@ -421,6 +395,10 @@
     if (Number.isNaN(spinPixelsPerSec)) spinPixelsPerSec = 26;
     var nightLightsEnabled = savedFlag('night-lights', false);
     var windEnabled = savedFlag('wind-enabled', false);
+    var owmEnabled = {
+      clouds: savedFlag('clouds-enabled', false),
+      temperature: savedFlag('temperature-enabled', false)
+    };
     var windField = null;
     var radarTileUrl = null;
     var FLIGHT_RENDER_MS = 500; // 2fps for plane movement (more than enough for globe scale)
@@ -680,6 +658,12 @@
       if (map.getLayer('wind-layer')) {
         map.setLayoutProperty('wind-layer', 'visibility', windEnabled ? 'visible' : 'none');
       }
+      ['clouds', 'temperature'].forEach(function (id) {
+        var layerId = 'owm-' + id + '-layer';
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, 'visibility', owmEnabled[id] ? 'visible' : 'none');
+        }
+      });
     }
 
     var spinning = false;
@@ -979,6 +963,10 @@
         });
       }
 
+      // --- OpenWeatherMap overlays (clouds, temperature) ---
+      addOwmLayer('clouds', 'clouds_new', 0.55);
+      addOwmLayer('temperature', 'temp_new', 0.5);
+
       // --- Wind streamlines ---
       if (!map.getSource('wind')) {
         map.addSource('wind', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -1220,6 +1208,53 @@
       }
     }
 
+    // --- OpenWeatherMap overlays ---
+
+    function owmKey() { return localStorage.getItem('owm-api-key') || ''; }
+
+    // Sources are only created once a key exists; without one every tile 401s.
+    function addOwmLayer(id, owmLayerName, opacity) {
+      var key = owmKey();
+      if (!key) return;
+      var sourceId = 'owm-' + id;
+      var layerId = sourceId + '-layer';
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: 'raster',
+          tiles: [owmTiles(owmLayerName, key)],
+          tileSize: 256,
+          maxzoom: OWM_MAXZOOM,
+          attribution: 'OpenWeatherMap'
+        });
+      }
+      if (!map.getLayer(layerId)) {
+        map.addLayer({
+          id: layerId,
+          type: 'raster',
+          source: sourceId,
+          paint: { 'raster-opacity': opacity },
+          layout: { 'visibility': owmEnabled[id] ? 'visible' : 'none' }
+        });
+      }
+    }
+
+    function setOwmEnabled(id, on) {
+      owmEnabled[id] = on;
+      localStorage.setItem(id + '-enabled', on ? '1' : '0');
+      if (!mapLoaded) return;
+      var layerId = 'owm-' + id + '-layer';
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', on ? 'visible' : 'none');
+      } else if (on) {
+        // Key may have arrived after the style loaded.
+        addOwmLayer('clouds', 'clouds_new', 0.55);
+        addOwmLayer('temperature', 'temp_new', 0.5);
+      }
+    }
+
+    window.setCloudsEnabled = function (on) { setOwmEnabled('clouds', on); };
+    window.setTemperatureEnabled = function (on) { setOwmEnabled('temperature', on); };
+
     // --- Wind (Open-Meteo, primary view only) ---
 
     // Mapbox's canonical dash-offset cycle; stepping through it makes the
@@ -1383,7 +1418,9 @@
         src.setTiles([tileUrl]);
         return;
       }
-      map.addSource('radar', { type: 'raster', tiles: [tileUrl], tileSize: 256 });
+      // RainViewer answers 200 with a "Zoom Level Not Supported" placeholder
+      // image above z7, so cap the source and let Mapbox overzoom instead.
+      map.addSource('radar', { type: 'raster', tiles: [tileUrl], tileSize: 256, maxzoom: 7 });
       map.addLayer({
         id: 'radar-layer', type: 'raster', source: 'radar',
         paint: { 'raster-opacity': 0.5 },

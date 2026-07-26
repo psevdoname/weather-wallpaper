@@ -133,6 +133,16 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
             config.userContentController.addUserScript(script)
         }
 
+        // Inject OpenWeatherMap key before page load
+        if let key = UserDefaults.standard.string(forKey: "owm-api-key"), !key.isEmpty {
+            let script = WKUserScript(
+                source: "localStorage.setItem('owm-api-key', \(quoteJS(key)));",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            config.userContentController.addUserScript(script)
+        }
+
         // Inject preferred unit system before page load
         if let unit = pendingUnitSystem ?? UserDefaults.standard.string(forKey: "unit-system"), ["imperial", "metric"].contains(unit) {
             let script = WKUserScript(
@@ -176,6 +186,7 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         let d = UserDefaults.standard
         let bools = [
             "flights-enabled", "radar-enabled", "wind-enabled",
+            "clouds-enabled", "temperature-enabled",
             "spin-enabled", "pollen-enabled", "night-lights"
         ]
         var lines = bools.map { key -> String in
@@ -309,6 +320,22 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
     func injectWeatherToggle(_ enabled: Bool) {
         let js = "if (window.setWeatherEnabled) window.setWeatherEnabled(\(enabled));"
         evaluateOnAll(js)
+    }
+
+    func injectOwmApiKey(_ key: String) {
+        let js = """
+        localStorage.setItem('owm-api-key', \(quoteJS(key)));
+        location.reload();
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectCloudsToggle(_ enabled: Bool) {
+        evaluateOnAll("if (window.setCloudsEnabled) window.setCloudsEnabled(\(enabled));")
+    }
+
+    func injectTemperatureToggle(_ enabled: Bool) {
+        evaluateOnAll("if (window.setTemperatureEnabled) window.setTemperatureEnabled(\(enabled));")
     }
 
     func injectWindToggle(_ enabled: Bool) {
