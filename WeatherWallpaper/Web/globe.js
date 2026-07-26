@@ -108,11 +108,14 @@
   // grid, so the field costs a single call. Rendered as streamlines with an
   // animated dash rather than GPU particles: streamlines are ordinary line
   // layers, so they project correctly on the globe for free.
-  var WIND_GRID_COLS = 20;
-  var WIND_GRID_ROWS = 15;          // 300 points, ~0.2s per request
-  var WIND_PARTICLES = 800;
+  // Open-Meteo bills per *location*, not per request: a 20x15 grid costs 300
+  // calls against a 5000/hour budget, which a few zoom changes exhausted.
+  // 14x10 keeps a single request at 140 calls.
+  var WIND_GRID_COLS = 14;
+  var WIND_GRID_ROWS = 10;
+  var WIND_PARTICLES = 1300;
   var WIND_TRAIL = 9;               // positions kept per particle
-  var WIND_TICK_MS = 80;
+  var WIND_TICK_MS = 85;
   var WIND_MAX_AGE = 110;           // ticks before a particle is reseeded, so
                                     // they don't all pile into convergence zones
   var WIND_PX_PER_SEC = 45;         // on-screen speed of a reference wind
@@ -588,6 +591,8 @@
           layerVisibility: map.getLayer('wind-layer')
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
           lastFeatureCount: windLastFeatureCount,
+          lastError: windLastError,
+          urlLength: windLastUrlLength,
           zoom: map.getZoom()
         };
         if (windField) {
@@ -1009,7 +1014,7 @@
               8, 'rgba(195,230,255,0.65)',
               18, 'rgba(255,240,205,0.9)'
             ],
-            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.1, 6, 1.5, 10, 2.2],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.2, 6, 1.6, 10, 2.4],
             'line-opacity': 0.85
           }
         });
@@ -1291,9 +1296,15 @@
     var windParticles = [];
     var windTickInterval = null;
     var windLastFeatureCount = -1;
+    var windLastError = null;
+    var windLastUrlLength = 0;
     var windFieldIsGlobal = false;
     var lastWindRequest = 0;
-    var WIND_REQUEST_MIN_MS = 45000;
+    // At 140 calls per request this allows ~4200 calls/hour, inside the free
+    // hourly budget even if the view keeps changing.
+    var WIND_REQUEST_MIN_MS = 120000;
+    var WIND_BACKOFF_MS = 15 * 60000;
+    var windBackoffUntil = 0;
 
     // The field is sampled for whatever was on screen at the time, so after a
     // zoom or pan it may no longer cover the view at all — in which case every
@@ -1309,10 +1320,30 @@
     }
 
     function seedParticle(p) {
-        var north = windField.south + windField.dLat * (windField.rows - 1);
-        var east = windField.west + windField.dLon * (windField.cols - 1);
-        p.lat = windField.south + Math.random() * (north - windField.south);
-        p.lon = windField.west + Math.random() * (east - windField.west);
+        var south = windField.south;
+        var west = windField.west;
+        var north = south + windField.dLat * (windField.rows - 1);
+        var east = west + windField.dLon * (windField.cols - 1);
+
+        // getBounds is unreliable under the globe projection, so only clamp to
+        // the viewport once we're zoomed in enough for it to be meaningful.
+        if (map.getZoom() >= FLIGHTS_GLOBAL_ZOOM) {
+          try {
+            var b = map.getBounds();
+            south = Math.max(south, b.getSouth());
+            north = Math.min(north, b.getNorth());
+            west = Math.max(west, b.getWest());
+            east = Math.min(east, b.getEast());
+          } catch (e) { }
+        }
+        if (!(north > south && east > west)) {
+          south = windField.south; west = windField.west;
+          north = south + windField.dLat * (windField.rows - 1);
+          east = west + windField.dLon * (windField.cols - 1);
+        }
+
+        p.lat = south + Math.random() * (north - south);
+        p.lon = west + Math.random() * (east - west);
         p.trail = [];
         p.age = Math.floor(Math.random() * WIND_MAX_AGE);
         p.speed = 0;
@@ -1330,9 +1361,8 @@
       // Seconds of simulated time per tick, chosen so a reference wind travels
       // WIND_PX_PER_SEC on screen regardless of zoom.
       var pixelsPerDegree = 512 * Math.pow(2, map.getZoom()) / 360;
-      var timeScale = WIND_PX_PER_SEC * METERS_PER_DEGREE /
-                      (WIND_REFERENCE_SPEED * pixelsPerDegree);
-      var dt = (WIND_TICK_MS / 1000) * timeScale;
+      var baseScale = WIND_PX_PER_SEC * METERS_PER_DEGREE / pixelsPerDegree;
+      var tickSeconds = WIND_TICK_MS / 1000;
 
       var features = [];
       for (var i = 0; i < windParticles.length; i++) {
@@ -1345,6 +1375,16 @@
         if (p.trail.length > WIND_TRAIL) p.trail.shift();
 
         p.speed = Math.sqrt(w.u * w.u + w.v * w.v);
+
+        // Screen speed follows sqrt(wind speed), not wind speed itself. Linear
+        // mapping is faithful but unreadable: a 1 m/s breeze drew a 6px dot
+        // while a gale shot off screen. sqrt keeps faster genuinely faster
+        // while leaving calm air visible.
+        var gain = p.speed > 0.01
+          ? Math.sqrt(p.speed / WIND_REFERENCE_SPEED) / p.speed
+          : 0;
+        var dt = tickSeconds * baseScale * gain;
+
         p.lat += (w.v * dt) / METERS_PER_DEGREE;
         p.lon += (w.u * dt) / (METERS_PER_DEGREE * cosLat);
         p.age++;
@@ -1376,6 +1416,7 @@
       if (!window.isPrimaryView) return;
 
       var now = Date.now();
+      if (now < windBackoffUntil) return;
       if (!force && now - lastWindRequest < WIND_REQUEST_MIN_MS) return;
       lastWindRequest = now;
 
@@ -1408,8 +1449,14 @@
         '&longitude=' + lons.join(',') +
         '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms';
 
+      windLastUrlLength = url.length;
       fetch(url)
         .then(function (res) {
+          if (res.status === 429) {
+            // Rate limited: stop asking for a while rather than hammering.
+            windBackoffUntil = Date.now() + WIND_BACKOFF_MS;
+            throw new Error('HTTP 429 (backing off)');
+          }
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
@@ -1443,7 +1490,10 @@
             });
           } catch (e) { }
         })
-        .catch(function (err) { console.warn('[Wind]', err.message || err); });
+        .catch(function (err) {
+          windLastError = (err && err.message) || String(err);
+          console.warn('[Wind]', windLastError);
+        });
     }
 
     function applyWindField(raw) {
@@ -1476,7 +1526,7 @@
         map.setLayoutProperty('wind-layer', 'visibility', on ? 'visible' : 'none');
       }
       if (on) {
-        if (windFieldCoversView()) rebuildStreamlines(); else fetchWind(true);
+        if (windFieldCoversView()) rebuildStreamlines(); else fetchWind();
         startWindAnimation();
       } else {
         stopWindAnimation();
