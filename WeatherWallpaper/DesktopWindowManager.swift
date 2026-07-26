@@ -195,8 +195,11 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         if let style = d.string(forKey: "map-style"), !style.isEmpty {
             lines.append("localStorage.setItem('map-style', '\(style)');")
         }
-        if let detail = d.string(forKey: "map-detail"), !detail.isEmpty {
-            lines.append("localStorage.setItem('map-detail', '\(detail)');")
+        for name in ["labels", "boundaries", "roads", "roadGlow", "paths", "roadLabels", "poiLabels"] {
+            lines.append("localStorage.setItem('feature-\(name)', '\(d.bool(forKey: "feature-\(name)") ? "1" : "0")');")
+        }
+        if let color = d.string(forKey: "flight-color"), !color.isEmpty {
+            lines.append("localStorage.setItem('flight-color', '\(color)');")
         }
         let zoom = d.object(forKey: "zoom-level") as? Double ?? 2.5
         lines.append("localStorage.setItem('zoom-level', '\(zoom)');")
@@ -343,10 +346,18 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         evaluateOnAll(js)
     }
 
-    func injectMapDetail(_ level: String) {
+    func injectMapFeature(_ name: String, _ enabled: Bool) {
         let js = """
-        localStorage.setItem('map-detail', \(quoteJS(level)));
-        if (window.setMapDetail) window.setMapDetail(\(quoteJS(level)));
+        localStorage.setItem('feature-\(name)', '\(enabled ? "1" : "0")');
+        if (window.setMapFeature) window.setMapFeature(\(quoteJS(name)), \(enabled));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectFlightColor(_ hex: String) {
+        let js = """
+        localStorage.setItem('flight-color', \(quoteJS(hex)));
+        if (window.setFlightColor) window.setFlightColor(\(quoteJS(hex)));
         """
         evaluateOnAll(js)
     }

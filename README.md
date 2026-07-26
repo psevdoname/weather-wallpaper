@@ -69,10 +69,10 @@ without the menu closing after each click:
 | Setting | Description |
 |---------|-------------|
 | Map style | One of seven basemaps |
-| Detail | How much is drawn over the geography: None / Minimal / Normal / Full (roads included) |
-| Zoom | Globe / Country / City / Street |
+| Map features | Individual toggles: place names, borders, roads, road glow, pedestrian paths, road names, POIs |
+| Zoom | Eight levels from Globe to Block |
 | Units | Imperial or metric |
-| Flights | Live aircraft positions |
+| Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
 | Wind | Live 10m wind as animated streamlines |
 | Clouds / Temperature | Global overlays (needs an OpenWeather key) |

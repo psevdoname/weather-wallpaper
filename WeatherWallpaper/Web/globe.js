@@ -389,12 +389,21 @@
     var lastFlightFetch = 0;
     var flightsEnabled = savedFlag('flights-enabled', false);
     var weatherEnabled = savedFlag('radar-enabled', false);
-    var detailLevel = localStorage.getItem('map-detail') || 'normal';
+    var mapFeatures = {
+      labels: savedFlag('feature-labels', true),
+      boundaries: savedFlag('feature-boundaries', false),
+      roads: savedFlag('feature-roads', false),
+      roadGlow: savedFlag('feature-roadGlow', false),
+      paths: savedFlag('feature-paths', false),
+      roadLabels: savedFlag('feature-roadLabels', false),
+      poiLabels: savedFlag('feature-poiLabels', false)
+    };
     var spinEnabledInitial = savedFlag('spin-enabled', false);
     var spinPixelsPerSec = parseFloat(localStorage.getItem('spin-speed'));
     if (Number.isNaN(spinPixelsPerSec)) spinPixelsPerSec = 26;
     var nightLightsEnabled = savedFlag('night-lights', false);
     var windEnabled = savedFlag('wind-enabled', false);
+    var flightColor = localStorage.getItem('flight-color') || palette.accent;
     var owmEnabled = {
       clouds: savedFlag('clouds-enabled', false),
       temperature: savedFlag('temperature-enabled', false)
@@ -554,84 +563,84 @@
       applyNightBlend();
     };
 
-    // Detail levels, coarse to fine. Roads are part of this because they are
-    // what actually buries the geography at country zoom.
-    var DETAIL_LAYER_IDS = [
-      'country-labels', 'state-labels', 'city-labels', 'neighborhood-labels', 'road-lights'
+    // Individual feature toggles. Each one covers both our own layers and the
+    // equivalent in the basemap, which is what actually draws most of this.
+    var LABEL_LAYER_IDS = [
+      'country-labels', 'state-labels', 'city-labels', 'neighborhood-labels'
     ];
-    var DETAIL_LEVELS = {
-      off: [],
-      minimal: ['country-labels'],
-      normal: ['country-labels', 'state-labels', 'city-labels'],
-      full: DETAIL_LAYER_IDS
-    };
 
-    // What the *basemap itself* draws underneath our layers. Hiding our
-    // road-lights layer was never enough — the roads and borders people see
-    // come from the base style.
-    var DETAIL_BASEMAP = {
-      off: { roads: false, boundaries: false },
-      minimal: { roads: false, boundaries: false },
-      normal: { roads: false, boundaries: true },
-      full: { roads: true, boundaries: true }
-    };
+    function setVisible(layerId, visible) {
+      try {
+        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+      } catch (e) { }
+    }
 
     function setConfig(property, value) {
       try { map.setConfigProperty('basemap', property, value); } catch (e) { }
     }
 
-    function applyBasemapDetail() {
-      var cfg = DETAIL_BASEMAP[detailLevel] || DETAIL_BASEMAP.normal;
-
-      // Standard-derived styles, via config properties. The two Standard
-      // variants expose different knobs, and setting one a style doesn't
-      // declare is simply ignored.
-      setConfig('showAdminBoundaries', cfg.boundaries);
-      setConfig('showPedestrianRoads', cfg.roads);
-      setConfig('showRoadsAndTransit', cfg.roads);   // standard-satellite only
-
-      // Plain Standard has no boolean for roads at all, so paint them the
-      // colour of the land instead — the theme LUT is applied to both equally,
-      // so they vanish under faded/monochrome just as well as under default.
-      if (roadDefaults) {
-        var c = cfg.roads ? roadDefaults : { motorways: roadDefaults.land, trunks: roadDefaults.land, roads: roadDefaults.land };
-        setConfig('colorMotorways', c.motorways);
-        setConfig('colorTrunks', c.trunks);
-        setConfig('colorRoads', c.roads);
-      }
-
-      // Classic vector styles (dark-v11, light-v11) expose their layers, so
-      // hide them directly. Our own road-lights layer is handled separately.
+    // Hides layers of a classic vector style (dark-v11 and friends), which
+    // expose their layers directly rather than through config properties.
+    function setSourceLayerVisible(sourceLayerName, visible, exceptId) {
       var style = map.getStyle();
       var layers = (style && style.layers) || [];
       for (var i = 0; i < layers.length; i++) {
         var layer = layers[i];
-        var sourceLayer = layer['source-layer'];
-        if (!sourceLayer || layer.id === 'road-lights') continue;
-        var visible;
-        if (sourceLayer === 'road') visible = cfg.roads;
-        else if (sourceLayer === 'admin') visible = cfg.boundaries;
-        else continue;
-        try {
-          map.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
-        } catch (e) { }
+        if (layer['source-layer'] !== sourceLayerName) continue;
+        if (exceptId && layer.id === exceptId) continue;
+        setVisible(layer.id, visible);
       }
     }
 
-    function applyDetail() {
-      var shown = DETAIL_LEVELS[detailLevel] || DETAIL_LEVELS.normal;
-      for (var i = 0; i < DETAIL_LAYER_IDS.length; i++) {
-        var id = DETAIL_LAYER_IDS[i];
-        var vis = shown.indexOf(id) >= 0 ? 'visible' : 'none';
-        try { map.setLayoutProperty(id, 'visibility', vis); } catch (e) { }
+    function applyMapFeatures() {
+      var f = mapFeatures;
+
+      for (var i = 0; i < LABEL_LAYER_IDS.length; i++) {
+        setVisible(LABEL_LAYER_IDS[i], f.labels);
       }
-      applyBasemapDetail();
+
+      setConfig('showAdminBoundaries', f.boundaries);
+      setSourceLayerVisible('admin', f.boundaries);
+
+      // Standard Satellite has a boolean; plain Standard has none, so its roads
+      // are painted the colour of the land instead.
+      setConfig('showRoadsAndTransit', f.roads);
+      if (roadDefaults) {
+        var c = f.roads
+          ? roadDefaults
+          : { motorways: roadDefaults.land, trunks: roadDefaults.land, roads: roadDefaults.land };
+        setConfig('colorMotorways', c.motorways);
+        setConfig('colorTrunks', c.trunks);
+        setConfig('colorRoads', c.roads);
+      }
+      setSourceLayerVisible('road', f.roads, 'road-lights');
+      setVisible('road-lights', f.roadGlow);
+
+      setConfig('showPedestrianRoads', f.paths);
+      setConfig('showRoadLabels', f.roadLabels);
+      setConfig('showPointOfInterestLabels', f.poiLabels);
+      setConfig('showTransitLabels', f.poiLabels);
     }
 
-    window.setMapDetail = function (level) {
-      detailLevel = DETAIL_LEVELS[level] ? level : 'normal';
-      localStorage.setItem('map-detail', detailLevel);
-      applyDetail();
+    window.setMapFeature = function (name, on) {
+      if (!(name in mapFeatures)) return;
+      mapFeatures[name] = on;
+      localStorage.setItem('feature-' + name, on ? '1' : '0');
+      applyMapFeatures();
+    };
+
+    // Planes are easy to lose against red admin boundaries, so the colour is
+    // configurable. The icon is a canvas image, so it has to be redrawn.
+    window.setFlightColor = function (color) {
+      flightColor = color;
+      localStorage.setItem('flight-color', color);
+      if (!mapLoaded || !map.getLayer('flights-layer')) return;
+      try {
+        map.removeLayer('flights-layer');
+        map.removeImage('airplane');
+      } catch (e) { }
+      addCustomLayers();
+      renderFlightPositions();
     };
 
     window.setSpinSpeed = function (pixelsPerSec) {
@@ -641,7 +650,7 @@
 
     // Restores every toggle-driven layer state after a style swap.
     function reapplyToggles() {
-      applyDetail();
+      applyMapFeatures();
       if (map.getLayer('flights-layer')) {
         map.setLayoutProperty('flights-layer', 'visibility', flightsEnabled ? 'visible' : 'none');
         renderFlightPositions();
@@ -739,7 +748,7 @@
       refreshTerminator();
       if (flightsEnabled) fetchFlights(true);
       if (weatherEnabled) fetchRadar();
-      if (windEnabled) fetchWind();
+      if (windEnabled) fetchWind(true);
 
       timers.push(setInterval(function () {
         if (!appPaused && flightsEnabled) fetchFlights(true);
@@ -754,7 +763,7 @@
       }, REFRESH.terminator));
 
       timers.push(setInterval(function () {
-        if (!appPaused && windEnabled) fetchWind();
+        if (!appPaused && windEnabled) fetchWind(true);
       }, REFRESH.wind));
     }
 
@@ -1004,12 +1013,13 @@
         map.addSource('flights', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       }
 
-      if (!map.hasImage('airplane')) {
+      if (map.hasImage('airplane')) map.removeImage('airplane');
+      if (true) {
         var sz = 48;
         var ic = document.createElement('canvas');
         ic.width = sz; ic.height = sz;
         var ctx = ic.getContext('2d');
-        ctx.fillStyle = palette.accent;
+        ctx.fillStyle = flightColor;
         ctx.translate(sz / 2, sz / 2);
         ctx.beginPath();
         ctx.moveTo(0, -14); ctx.lineTo(3, -4); ctx.lineTo(14, 2);
@@ -1110,9 +1120,15 @@
       // panning or spinning has to pull in the newly visible area. fetchFlights
       // rate-limits itself.
       if (map.getZoom() >= FLIGHTS_GLOBAL_ZOOM) fetchFlights();
-      if (windEnabled && windField && windZoomAtBuild !== null &&
-          Math.abs(map.getZoom() - windZoomAtBuild) > 0.3) {
-        rebuildStreamlines();
+      if (windEnabled) {
+        if (!windFieldCoversView()) {
+          fetchWind();
+        } else if (windZoomAtBuild !== null &&
+                   Math.abs(map.getZoom() - windZoomAtBuild) > 0.25) {
+          // Step length is derived from zoom, so lines built at another zoom
+          // are the wrong on-screen size.
+          rebuildStreamlines();
+        }
       }
       if (spinning) return;
       applyNightBlend();
@@ -1127,7 +1143,7 @@
       // Restore the rest of the persisted state.
       if (flightsEnabled) startFlightAnimation();
       if (spinEnabledInitial) window.setSpinEnabled(true);
-      if (windEnabled) { fetchWind(); startWindAnimation(); }
+      if (windEnabled) { fetchWind(true); startWindAnimation(); }
       if (savedFlag('pollen-enabled', false)) window.setPollenEnabled(true);
 
       // Start background tasks (flights, radar, terminator)
@@ -1268,6 +1284,22 @@
     var windDashStep = 0;
     var windDashInterval = null;
     var windZoomAtBuild = null;
+    var windFieldIsGlobal = false;
+    var lastWindRequest = 0;
+    var WIND_REQUEST_MIN_MS = 45000;
+
+    // The field is sampled for whatever was on screen at the time, so after a
+    // zoom or pan it may no longer cover the view at all — in which case every
+    // seed falls outside the grid and no streamlines are produced.
+    function windFieldCoversView() {
+      if (!windField) return false;
+      if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) return windFieldIsGlobal;
+      var b = map.getBounds();
+      var north = windField.south + windField.dLat * (windField.rows - 1);
+      var east = windField.west + windField.dLon * (windField.cols - 1);
+      return b.getSouth() >= windField.south && b.getNorth() <= north &&
+             b.getWest() >= windField.west && b.getEast() <= east;
+    }
 
     function startWindAnimation() {
       if (windDashInterval) return;
@@ -1284,17 +1316,28 @@
       if (windDashInterval) { clearInterval(windDashInterval); windDashInterval = null; }
     }
 
-    function fetchWind() {
+    function fetchWind(force) {
       if (!mapLoaded || appPaused || !windEnabled) return;
       if (!window.isPrimaryView) return;
 
+      var now = Date.now();
+      if (!force && now - lastWindRequest < WIND_REQUEST_MIN_MS) return;
+      lastWindRequest = now;
+
       var south, west, north, east;
-      if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) {
+      var isGlobal = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
+      if (isGlobal) {
         south = -60; west = -180; north = 75; east = 180;
       } else {
+        // Sample a margin beyond the viewport so small pans don't immediately
+        // fall outside the field and trigger another request.
         var b = map.getBounds();
-        south = b.getSouth(); west = b.getWest();
-        north = b.getNorth(); east = b.getEast();
+        var padLat = (b.getNorth() - b.getSouth()) * 0.25;
+        var padLon = (b.getEast() - b.getWest()) * 0.25;
+        south = Math.max(-85, b.getSouth() - padLat);
+        north = Math.min(85, b.getNorth() + padLat);
+        west = b.getWest() - padLon;
+        east = b.getEast() + padLon;
       }
 
       var lats = [], lons = [];
@@ -1329,6 +1372,7 @@
           }
           applyWindField({
             south: south, west: west, north: north, east: east,
+            global: isGlobal,
             cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
             u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
           });
@@ -1337,6 +1381,7 @@
               type: 'wind',
               json: JSON.stringify({
                 south: south, west: west, north: north, east: east,
+                global: isGlobal,
                 cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
                 u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
               })
@@ -1347,6 +1392,7 @@
     }
 
     function applyWindField(raw) {
+      windFieldIsGlobal = !!raw.global;
       windField = new WindField(
         raw.south, raw.west, raw.north, raw.east,
         raw.cols, raw.rows, raw.u, raw.v
@@ -1382,7 +1428,7 @@
         map.setLayoutProperty('wind-layer', 'visibility', on ? 'visible' : 'none');
       }
       if (on) {
-        if (windField) rebuildStreamlines(); else fetchWind();
+        if (windFieldCoversView()) rebuildStreamlines(); else fetchWind(true);
         startWindAnimation();
       } else {
         stopWindAnimation();

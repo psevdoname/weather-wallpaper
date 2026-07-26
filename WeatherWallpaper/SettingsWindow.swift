@@ -18,15 +18,35 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("classic", "Classic"),
     ]
 
-    static let detailLevels: [(id: String, name: String)] = [
-        ("off", "None"),
-        ("minimal", "Minimal — countries only"),
-        ("normal", "Normal — countries, states, cities"),
-        ("full", "Full — everything, incl. roads"),
+    /// Keys match the mapFeatures object in globe.js.
+    private static let features: [(key: String, name: String, defaultOn: Bool)] = [
+        ("labels", "Place names", true),
+        ("boundaries", "Country & state borders", false),
+        ("roads", "Roads", false),
+        ("roadGlow", "Road glow (stylised motorways)", false),
+        ("paths", "Pedestrian paths & trails", false),
+        ("roadLabels", "Road names", false),
+        ("poiLabels", "Points of interest & transit", false),
     ]
 
     private static let zoomLevels: [(value: Double, name: String)] = [
-        (2.5, "Globe"), (5.0, "Country"), (8.0, "City"), (12.0, "Street"),
+        (2.5, "Globe"),
+        (3.8, "Continent"),
+        (5.0, "Country"),
+        (6.5, "Region"),
+        (8.0, "City"),
+        (10.0, "District"),
+        (12.0, "Street"),
+        (14.0, "Block"),
+    ]
+
+    private static let flightColors: [(hex: String, name: String)] = [
+        ("#C9A84C", "Gold"),
+        ("#FFFFFF", "White"),
+        ("#4DC98A", "Green"),
+        ("#4D8CC9", "Blue"),
+        ("#FF6B3D", "Orange"),
+        ("#E64DFF", "Magenta"),
     ]
 
     private static let spinSpeeds: [(value: Double, name: String)] = [
@@ -72,10 +92,6 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             selected: Self.mapStyles.firstIndex { $0.id == currentStyleId } ?? 0,
             action: #selector(styleChanged(_:))))
         stack.addArrangedSubview(popupRow(
-            "Detail", Self.detailLevels.map(\.name),
-            selected: Self.detailLevels.firstIndex { $0.id == currentDetailId } ?? 2,
-            action: #selector(detailChanged(_:))))
-        stack.addArrangedSubview(popupRow(
             "Zoom", Self.zoomLevels.map(\.name),
             selected: Self.zoomLevels.firstIndex { $0.value == defaults.double(forKey: "zoom-level") } ?? 0,
             action: #selector(zoomChanged(_:))))
@@ -85,8 +101,22 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             action: #selector(unitsChanged(_:))))
 
         stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(header("Map features"))
+        for feature in Self.features {
+            let button = NSButton(checkboxWithTitle: feature.name, target: self,
+                                  action: #selector(featureToggled(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier(feature.key)
+            button.state = featureIsOn(feature) ? .on : .off
+            stack.addArrangedSubview(button)
+        }
+
+        stack.addArrangedSubview(separator())
         stack.addArrangedSubview(header("Layers"))
         stack.addArrangedSubview(checkbox("Flights", key: "flights-enabled", action: #selector(flightsToggled(_:))))
+        stack.addArrangedSubview(popupRow(
+            "Flight colour", Self.flightColors.map(\.name),
+            selected: Self.flightColors.firstIndex { $0.hex == currentFlightColor } ?? 0,
+            action: #selector(flightColorChanged(_:))))
         stack.addArrangedSubview(checkbox("Weather radar", key: "radar-enabled", action: #selector(radarToggled(_:))))
         stack.addArrangedSubview(checkbox("Wind", key: "wind-enabled", action: #selector(windToggled(_:))))
         stack.addArrangedSubview(checkbox("Clouds (needs OpenWeather key)", key: "clouds-enabled", action: #selector(cloudsToggled(_:))))
@@ -173,7 +203,15 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     // MARK: - Current values
 
     private var currentStyleId: String { defaults.string(forKey: "map-style") ?? "faded" }
-    private var currentDetailId: String { defaults.string(forKey: "map-detail") ?? "normal" }
+    private var currentFlightColor: String { defaults.string(forKey: "flight-color") ?? "#C9A84C" }
+
+    /// Defaults have to be registered lazily: a key absent from UserDefaults
+    /// must read as the feature's own default, not as false.
+    private func featureIsOn(_ feature: (key: String, name: String, defaultOn: Bool)) -> Bool {
+        let key = "feature-\(feature.key)"
+        if defaults.object(forKey: key) == nil { return feature.defaultOn }
+        return defaults.bool(forKey: key)
+    }
     private var currentSpinSpeed: Double { defaults.object(forKey: "spin-speed") as? Double ?? 26 }
 
     // MARK: - Actions
@@ -184,10 +222,17 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         manager.injectMapStyle(id)
     }
 
-    @objc private func detailChanged(_ sender: NSPopUpButton) {
-        let id = Self.detailLevels[sender.indexOfSelectedItem].id
-        defaults.set(id, forKey: "map-detail")
-        manager.injectMapDetail(id)
+    @objc private func featureToggled(_ sender: NSButton) {
+        guard let key = sender.identifier?.rawValue else { return }
+        let on = sender.state == .on
+        defaults.set(on, forKey: "feature-\(key)")
+        manager.injectMapFeature(key, on)
+    }
+
+    @objc private func flightColorChanged(_ sender: NSPopUpButton) {
+        let hex = Self.flightColors[sender.indexOfSelectedItem].hex
+        defaults.set(hex, forKey: "flight-color")
+        manager.injectFlightColor(hex)
     }
 
     @objc private func zoomChanged(_ sender: NSPopUpButton) {

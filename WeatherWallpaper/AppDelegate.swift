@@ -9,20 +9,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var locationManager: LocationManager!
     private var settingsWindow: SettingsWindow?
 
-
     private var currentUnitSystem: String = "imperial"
-
 
     private let geocoder = CLGeocoder()
     private var geocodeCache: [String: String] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UserDefaults.standard.register(defaults: ["zoom-level": 2.5, "map-detail": "normal"])
+        UserDefaults.standard.register(defaults: ["zoom-level": 2.5, "feature-labels": true])
 
         if let savedUnit = UserDefaults.standard.string(forKey: "unit-system"), ["imperial", "metric"].contains(savedUnit) {
             currentUnitSystem = savedUnit
         }
-
 
         setupMenuBar()
 
@@ -57,7 +54,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             img.isTemplate = true
             statusItem.button?.image = img
         } else {
-            statusItem.button?.title = "*"
+            statusItem.button?.title = "\u{2600}"
         }
 
         let menu = NSMenu()
@@ -130,31 +127,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-
-
-
-    /// Imports the credentials.json downloaded from an OpenSky API client.
-    /// The secret goes to the Keychain, never to UserDefaults or the repo.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
