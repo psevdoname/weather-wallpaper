@@ -115,12 +115,12 @@
   var WIND_GRID_ROWS = 10;
   // Many thin short strokes read as a flowing field; fewer thick long ones
   // read as sausages.
-  var WIND_PARTICLES = 2600;
+  var WIND_PARTICLES = 3600;
   var WIND_TRAIL = 6;               // positions kept per particle
   var WIND_TICK_MS = 90;
   var WIND_MAX_AGE = 110;           // ticks before a particle is reseeded, so
                                     // they don't all pile into convergence zones
-  var WIND_PX_PER_SEC = 45;         // on-screen speed of a reference wind
+  var WIND_PX_PER_SEC = 30;         // on-screen speed of a reference wind
   var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field
   var METERS_PER_DEGREE = 111320;
 
@@ -394,7 +394,9 @@
     };
     var windField = null;
     var radarTileUrl = null;
-    var FLIGHT_RENDER_MS = 500; // 2fps for plane movement (more than enough for globe scale)
+    // Each reposition costs several map renders, so this is deliberately slow:
+    // at cruise speed a second of travel is sub-pixel on the globe.
+    var FLIGHT_RENDER_MS = 1000;
 
     // Background refresh cadence. Nothing here is a paid API: Open-Meteo,
     // RainViewer and NASA GIBS are free and keyless, OpenSky is free with a
@@ -414,6 +416,10 @@
       center: [startLon, startLat],
       zoom: currentZoomLevel,
       attributionControl: false,
+      // Symbols cross-fade over 300ms by default. The flight layer replaces
+      // thousands of icons twice a second, so the fade never settles and the
+      // map re-renders continuously — ~33fps of pure overhead while idle.
+      fadeDuration: 0,
     });
 
     var mapLoaded = false;
@@ -426,6 +432,7 @@
       applyStyleConfig();
       try { map.setProjection('globe'); } catch (e) { }
       reportStyleDiagnostics();
+      map.on('render', function () { renderCount++; });
       addCustomLayers();
       reapplyToggles();
       applyNightBlend();
@@ -598,10 +605,12 @@
           out.totalLayers = (style.layers || []).length;
         } catch (e) { out.styleError = e.message || String(e); }
         try {
+        out.renderFps = renderCount / ((performance.now() - renderCountStart) / 1000);
         out.spin = {
           spinEnabled: spinEnabled,
           spinning: spinning,
           timerRunning: spinTimer !== null,
+          workerDriven: spinWorker !== null,
           pixelsPerSec: spinPixelsPerSec,
           degPerSec: currentSpinSpeed(),
           frames: spinFrameCount,
@@ -758,6 +767,8 @@
     var lastSpinRender = 0;
     var spinFrameCount = 0;
     var spinStartedAt = 0;
+    var renderCount = 0;
+    var renderCountStart = performance.now();
     var spinLonTravelled = 0;
     var lastNightBlend = 0;
     // The terminator moves ~0.02° in 5s, so there is nothing to gain from
@@ -768,15 +779,34 @@
     // is currently running. They differ while a camera animation borrows the
     // camera — spinStep calls setCenter every frame, which would otherwise
     // cancel any flyTo in progress.
+    // Timers on a page WebKit considers hidden are throttled; timers inside a
+    // Worker are not. So the tick is generated in a worker and posted across.
+    var spinWorker = null;
+
     function startSpinLoop() {
-      if (spinTimer) return;
+      if (spinTimer || spinWorker) return;
       lastSpinRender = performance.now();
       if (!spinStartedAt) spinStartedAt = lastSpinRender;
+
+      if (!spinWorker) {
+        try {
+          var source = 'var t=null;onmessage=function(e){' +
+            'if(e.data.stop){clearInterval(t);t=null;return;}' +
+            'clearInterval(t);t=setInterval(function(){postMessage(0);},e.data.interval);};';
+          spinWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
+          spinWorker.onmessage = function () { if (spinning) spinStep(); };
+          spinWorker.postMessage({ interval: SPIN_INTERVAL_MS });
+          return;
+        } catch (e) {
+          spinWorker = null;   // fall back to a plain timer
+        }
+      }
       spinTimer = setInterval(spinStep, SPIN_INTERVAL_MS);
     }
 
     function stopSpinLoop() {
       if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
+      if (spinWorker) { spinWorker.terminate(); spinWorker = null; }
     }
 
     function runCameraAnimation(options) {
@@ -1140,7 +1170,7 @@
             'icon-ignore-placement': true,
             'visibility': flightsEnabled ? 'visible' : 'none'
           },
-          paint: { 'icon-opacity': 0.9 }
+          paint: { 'icon-opacity': 0.9, 'icon-opacity-transition': { duration: 0 } }
         });
       }
     }
