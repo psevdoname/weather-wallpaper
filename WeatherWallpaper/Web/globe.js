@@ -598,6 +598,16 @@
           out.totalLayers = (style.layers || []).length;
         } catch (e) { out.styleError = e.message || String(e); }
         try {
+        out.spin = {
+          spinEnabled: spinEnabled,
+          spinning: spinning,
+          timerRunning: spinTimer !== null,
+          pixelsPerSec: spinPixelsPerSec,
+          degPerSec: currentSpinSpeed(),
+          frames: spinFrameCount,
+          lonTravelled: spinLonTravelled,
+          elapsedSec: spinStartedAt ? (performance.now() - spinStartedAt) / 1000 : 0
+        };
         out.wind = {
           enabled: windEnabled,
           hasField: !!windField,
@@ -608,6 +618,27 @@
           layerVisibility: map.getLayer('wind-layer')
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
           lastFeatureCount: windLastFeatureCount,
+          tickIntervalMs: (function () {
+            if (!windTickTimes.length) return null;
+            var sum = 0, max = 0;
+            for (var i = 0; i < windTickTimes.length; i++) {
+              sum += windTickTimes[i];
+              if (windTickTimes[i] > max) max = windTickTimes[i];
+            }
+            return { avg: Math.round(sum / windTickTimes.length), max: Math.round(max), target: WIND_TICK_MS };
+          })(),
+          lonOffsets: (function () {
+            // Histogram of particle longitude relative to the map centre, to
+            // see whether spinning leaves a gap ahead of the view.
+            var c = map.getCenter().lng, buckets = {};
+            for (var i = 0; i < windParticles.length; i++) {
+              var d = windParticles[i].lon - c;
+              while (d > 180) d -= 360; while (d < -180) d += 360;
+              var key = String(Math.floor(d / 30) * 30);
+              buckets[key] = (buckets[key] || 0) + 1;
+            }
+            return buckets;
+          })(),
           lastError: windLastError,
           source: windFieldSource,
           urlLength: windLastUrlLength,
@@ -715,11 +746,19 @@
 
     var spinning = false;
     var spinEnabled = false;
-    var spinAnimId = null;
+    // Driven by a timer, not requestAnimationFrame: the wallpaper window is
+    // never focused, so WebKit treats the page as hidden and throttles rAF to
+    // about 1.5 calls per second — which looked like stutter, and like a
+    // stopped globe once the wind loop competed for the main thread.
+    var spinTimer = null;
+    var SPIN_INTERVAL_MS = 40;
     // Spin is specified in screen pixels per second rather than degrees, so it
     // feels the same on the globe and at street zoom (26 px/s is ~110s per
     // revolution on the globe view). Set from the menu bar.
     var lastSpinRender = 0;
+    var spinFrameCount = 0;
+    var spinStartedAt = 0;
+    var spinLonTravelled = 0;
     var lastNightBlend = 0;
     // The terminator moves ~0.02° in 5s, so there is nothing to gain from
     // recomputing the crossfade more often — and each one restarts a 1.5s
@@ -729,19 +768,29 @@
     // is currently running. They differ while a camera animation borrows the
     // camera — spinStep calls setCenter every frame, which would otherwise
     // cancel any flyTo in progress.
+    function startSpinLoop() {
+      if (spinTimer) return;
+      lastSpinRender = performance.now();
+      if (!spinStartedAt) spinStartedAt = lastSpinRender;
+      spinTimer = setInterval(spinStep, SPIN_INTERVAL_MS);
+    }
+
+    function stopSpinLoop() {
+      if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
+    }
+
     function runCameraAnimation(options) {
       var resumeAfter = spinning;
       if (resumeAfter) {
         spinning = false;
-        if (spinAnimId) { cancelAnimationFrame(spinAnimId); spinAnimId = null; }
+        stopSpinLoop();
       }
       map.flyTo(options);
       if (resumeAfter) {
         setTimeout(function () {
           if (!spinEnabled || spinning) return;
           spinning = true;
-          lastSpinRender = performance.now();
-          if (!spinAnimId) spinAnimId = requestAnimationFrame(spinStep);
+          startSpinLoop();
         }, (options.duration || 0) + 150);
       }
     }
@@ -749,26 +798,21 @@
     window.setSpinEnabled = function (on) {
       spinEnabled = on;
       spinning = on;
-      if (on) {
-        lastSpinRender = performance.now();
-        if (!spinAnimId) spinAnimId = requestAnimationFrame(spinStep);
-      } else {
-        if (spinAnimId) { cancelAnimationFrame(spinAnimId); spinAnimId = null; }
-      }
+      if (on) startSpinLoop(); else stopSpinLoop();
     };
     var appPaused = false;
     window.setAppPaused = function (paused) {
       appPaused = paused;
       if (paused) {
         // Stop animations
-        if (spinAnimId) { cancelAnimationFrame(spinAnimId); spinAnimId = null; }
+        stopSpinLoop();
         if (flightAnimInterval) { clearInterval(flightAnimInterval); flightAnimInterval = null; }
         stopWindAnimation();
         // Stop fetching
         stopBackgroundTasks();
       } else {
         // Resume animations if they were enabled
-        if (spinning && !spinAnimId) { lastSpinRender = performance.now(); spinAnimId = requestAnimationFrame(spinStep); }
+        if (spinning) startSpinLoop();
         if (flightsEnabled && !flightAnimInterval) { startFlightAnimation(); }
         if (windEnabled) startWindAnimation();
         // Resume fetching
@@ -824,8 +868,9 @@
       return spinPixelsPerSec * 360 / worldPx;
     }
 
-    function spinStep(ts) {
-      if (!spinning) { spinAnimId = null; return; }
+    function spinStep() {
+      if (!spinning) { stopSpinLoop(); return; }
+      var ts = performance.now();
 
       // Move on every frame. Throttling to 30fps on a 60/120Hz display is
       // itself the stutter: the map jumps once per 33ms while the compositor
@@ -833,9 +878,17 @@
       // interval, so the speed stays correct at any refresh rate.
       var dt = (ts - lastSpinRender) / 1000;
       lastSpinRender = ts;
-      if (dt > 0 && dt < 1) {   // skip the first frame and resumes after a pause
+      // WebKit throttles timers on this window (it is never focused), so gaps
+      // of several hundred ms are normal. Clamp long gaps instead of dropping
+      // them: discarding meant two thirds of elapsed time never turned the
+      // globe, so it crawled at a third of the requested speed.
+      if (dt > 0.5) dt = 0.5;
+      if (dt > 0) {   // skip the first frame and resumes after a pause
         var center = map.getCenter();
-        center.lng += currentSpinSpeed() * dt;
+        var step = currentSpinSpeed() * dt;
+        spinFrameCount++;
+        spinLonTravelled += step;
+        center.lng += step;
         if (center.lng > 180) center.lng -= 360;
         map.setCenter(center);
       }
@@ -843,7 +896,6 @@
         lastNightBlend = ts;
         applyNightBlend();
       }
-      spinAnimId = requestAnimationFrame(spinStep);
     }
 
     window.setFlightsEnabled = function (on) {
@@ -1324,6 +1376,8 @@
     var windTickInterval = null;
     var windLastFeatureCount = -1;
     var windLastError = null;
+    var windTickTimes = [];
+    var windLastTickAt = 0;
     var windFieldSource = null;
     var windLastUrlLength = 0;
     var windFieldIsGlobal = false;
@@ -1384,8 +1438,18 @@
         p.speed = 0;
     }
 
+    var windTickSkip = 0;
+
     function windTick() {
       if (appPaused || !windEnabled || !windField || !map.getSource('wind')) return;
+
+      // Rebuilding 2600 trails competes with the spin for the main thread, and
+      // while the globe is turning the particles' own motion is barely legible
+      // anyway — so halve the update rate rather than starve the rotation.
+      if (spinning) {
+        windTickSkip = (windTickSkip + 1) % 2;
+        if (windTickSkip !== 0) return;
+      }
 
       while (windParticles.length < WIND_PARTICLES) {
         var fresh = {};
@@ -1434,6 +1498,12 @@
           });
         }
       }
+      var nowTick = performance.now();
+      if (windLastTickAt) {
+        windTickTimes.push(nowTick - windLastTickAt);
+        if (windTickTimes.length > 60) windTickTimes.shift();
+      }
+      windLastTickAt = nowTick;
       windLastFeatureCount = features.length;
       map.getSource('wind').setData({ type: 'FeatureCollection', features: features });
     }
