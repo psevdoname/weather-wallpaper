@@ -175,7 +175,7 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
     private static func settingsBootstrapJS() -> String {
         let d = UserDefaults.standard
         let bools = [
-            "flights-enabled", "radar-enabled",
+            "flights-enabled", "radar-enabled", "wind-enabled",
             "spin-enabled", "pollen-enabled", "night-lights"
         ]
         var lines = bools.map { key -> String in
@@ -237,6 +237,8 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
             js = "if (window.receiveAllergy) window.receiveAllergy(\(jsonStr));"
         case "radarUrl":
             js = "if (window.receiveRadarUrl) window.receiveRadarUrl(\(jsonStr));"
+        case "wind":
+            js = "if (window.receiveWind) window.receiveWind(\(jsonStr));"
         default:
             return
         }
@@ -306,6 +308,11 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
 
     func injectWeatherToggle(_ enabled: Bool) {
         let js = "if (window.setWeatherEnabled) window.setWeatherEnabled(\(enabled));"
+        evaluateOnAll(js)
+    }
+
+    func injectWindToggle(_ enabled: Bool) {
+        let js = "if (window.setWindEnabled) window.setWindEnabled(\(enabled));"
         evaluateOnAll(js)
     }
 

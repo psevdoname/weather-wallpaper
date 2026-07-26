@@ -11,6 +11,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var flightsEnabled: Bool = false
     private var pollenEnabled: Bool = false
     private var weatherEnabled: Bool = false
+    private var windEnabled: Bool = false
     private var currentDetail: String = "normal"
     private var currentSpinSpeed: Double = 26
     private var spinEnabled: Bool = false
@@ -58,6 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         currentZoom = d.double(forKey: "zoom-level")
         flightsEnabled = d.bool(forKey: "flights-enabled")
         weatherEnabled = d.bool(forKey: "radar-enabled")
+        windEnabled = d.bool(forKey: "wind-enabled")
         spinEnabled = d.bool(forKey: "spin-enabled")
         if let detail = d.string(forKey: "map-detail"),
            Self.detailLevels.contains(where: { $0.id == detail }) {
@@ -152,6 +154,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let weatherItem = NSMenuItem(title: "Show Weather Radar", action: #selector(toggleWeather(_:)), keyEquivalent: "")
         weatherItem.state = weatherEnabled ? .on : .off
         menu.addItem(weatherItem)
+        let windItem = NSMenuItem(title: "Show Wind", action: #selector(toggleWind(_:)), keyEquivalent: "")
+        windItem.state = windEnabled ? .on : .off
+        menu.addItem(windItem)
         let pollenItem = NSMenuItem(title: "Show Pollen & Air Quality", action: #selector(togglePollen(_:)), keyEquivalent: "")
         pollenItem.state = pollenEnabled ? .on : .off
         menu.addItem(pollenItem)
@@ -419,6 +424,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = weatherEnabled ? .on : .off
         UserDefaults.standard.set(weatherEnabled, forKey: "radar-enabled")
         desktopManager.injectWeatherToggle(weatherEnabled)
+    }
+
+    @objc private func toggleWind(_ sender: NSMenuItem) {
+        windEnabled.toggle()
+        sender.state = windEnabled ? .on : .off
+        UserDefaults.standard.set(windEnabled, forKey: "wind-enabled")
+        desktopManager.injectWindToggle(windEnabled)
     }
 
     @objc private func togglePollen(_ sender: NSMenuItem) {

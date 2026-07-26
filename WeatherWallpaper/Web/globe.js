@@ -129,6 +129,21 @@
     [180, -MERCATOR_MAX_LAT], [-180, -MERCATOR_MAX_LAT]
   ];
 
+  // ==================== WIND ====================
+  // Live 10m wind from Open-Meteo (free, no key). One request returns the whole
+  // grid, so the field costs a single call. Rendered as streamlines with an
+  // animated dash rather than GPU particles: streamlines are ordinary line
+  // layers, so they project correctly on the globe for free.
+  var WIND_GRID_COLS = 20;
+  var WIND_GRID_ROWS = 15;          // 300 points, ~0.2s per request
+  var WIND_STREAMLINES = 420;
+  var WIND_STEPS = 18;
+  var WIND_TARGET_PX = 70;          // on-screen length drawn by a typical wind
+  var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field,
+                                    // so most streamlines land near the target
+                                    // and gales visibly run longer
+  var METERS_PER_DEGREE = 111320;
+
   var mapContainer = document.getElementById('globe-map');
   var token = getMapboxToken();
   if (!token) {
@@ -296,6 +311,79 @@
     }, 'image/png');
   }
 
+  // A sampled wind field over a regular lat/lon grid.
+  function WindField(south, west, north, east, cols, rows, u, v) {
+    this.south = south; this.west = west;
+    this.cols = cols; this.rows = rows;
+    this.dLat = (north - south) / (rows - 1);
+    this.dLon = (east - west) / (cols - 1);
+    this.u = u; this.v = v;
+  }
+
+  // Bilinear sample. Returns null outside the grid.
+  WindField.prototype.sample = function (lat, lon) {
+    var x = (lon - this.west) / this.dLon;
+    var y = (lat - this.south) / this.dLat;
+    if (!(x >= 0 && y >= 0 && x <= this.cols - 1 && y <= this.rows - 1)) return null;
+
+    var x0 = Math.floor(x), y0 = Math.floor(y);
+    var x1 = Math.min(x0 + 1, this.cols - 1), y1 = Math.min(y0 + 1, this.rows - 1);
+    var fx = x - x0, fy = y - y0;
+
+    var i00 = y0 * this.cols + x0, i10 = y0 * this.cols + x1;
+    var i01 = y1 * this.cols + x0, i11 = y1 * this.cols + x1;
+
+    function mix(a, b, t) { return a + (b - a) * t; }
+    return {
+      u: mix(mix(this.u[i00], this.u[i10], fx), mix(this.u[i01], this.u[i11], fx), fy),
+      v: mix(mix(this.v[i00], this.v[i10], fx), mix(this.v[i01], this.v[i11], fx), fy)
+    };
+  };
+
+  // Meteorological convention: wind_direction is the direction the wind comes
+  // FROM, so the air's velocity vector points the opposite way.
+  function windComponents(speed, directionDeg) {
+    var rad = directionDeg * Math.PI / 180;
+    return { u: -speed * Math.sin(rad), v: -speed * Math.cos(rad) };
+  }
+
+  // Integrates streamlines through the field, seeded at random points.
+  // stepSeconds is chosen by the caller so a typical wind draws a line of
+  // roughly constant on-screen length whatever the zoom.
+  function buildStreamlines(field, count, steps, stepSeconds) {
+    var features = [];
+    var north = field.south + field.dLat * (field.rows - 1);
+    var east = field.west + field.dLon * (field.cols - 1);
+
+    for (var n = 0; n < count; n++) {
+      var lat = field.south + Math.random() * (north - field.south);
+      var lon = field.west + Math.random() * (east - field.west);
+      var coords = [];
+      var speedSum = 0;
+
+      for (var s = 0; s < steps; s++) {
+        var w = field.sample(lat, lon);
+        if (!w) break;
+        coords.push([lon, lat]);
+        speedSum += Math.sqrt(w.u * w.u + w.v * w.v);
+
+        var cosLat = Math.cos(lat * DEG);
+        if (cosLat < 0.05) break;   // degenerate near the poles
+        lat += (w.v * stepSeconds) / METERS_PER_DEGREE;
+        lon += (w.u * stepSeconds) / (METERS_PER_DEGREE * cosLat);
+        if (lat > 89 || lat < -89) break;
+      }
+
+      if (coords.length < 3) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: coords },
+        properties: { speed: speedSum / coords.length }
+      });
+    }
+    return { type: 'FeatureCollection', features: features };
+  }
+
   function initMap(accessToken) {
     mapboxgl.workerUrl = 'mapbox-gl-csp-worker.js';
     mapboxgl.accessToken = accessToken;
@@ -332,6 +420,8 @@
     var spinPixelsPerSec = parseFloat(localStorage.getItem('spin-speed'));
     if (Number.isNaN(spinPixelsPerSec)) spinPixelsPerSec = 26;
     var nightLightsEnabled = savedFlag('night-lights', false);
+    var windEnabled = savedFlag('wind-enabled', false);
+    var windField = null;
     var radarTileUrl = null;
     var FLIGHT_RENDER_MS = 500; // 2fps for plane movement (more than enough for globe scale)
 
@@ -341,7 +431,8 @@
     var REFRESH = {
       flights: 5 * 60000,
       radar: 10 * 60000,
-      terminator: 10 * 60000
+      terminator: 10 * 60000,
+      wind: 30 * 60000
     };
     var timers = [];
 
@@ -586,6 +677,9 @@
       if (map.getLayer('nightlights-global-layer')) {
         map.setLayoutProperty('nightlights-global-layer', 'visibility', nightLightsEnabled ? 'visible' : 'none');
       }
+      if (map.getLayer('wind-layer')) {
+        map.setLayoutProperty('wind-layer', 'visibility', windEnabled ? 'visible' : 'none');
+      }
     }
 
     var spinning = false;
@@ -638,12 +732,14 @@
         // Stop animations
         if (spinAnimId) { cancelAnimationFrame(spinAnimId); spinAnimId = null; }
         if (flightAnimInterval) { clearInterval(flightAnimInterval); flightAnimInterval = null; }
+        stopWindAnimation();
         // Stop fetching
         stopBackgroundTasks();
       } else {
         // Resume animations if they were enabled
         if (spinning && !spinAnimId) { lastSpinRender = performance.now(); spinAnimId = requestAnimationFrame(spinStep); }
         if (flightsEnabled && !flightAnimInterval) { startFlightAnimation(); }
+        if (windEnabled) startWindAnimation();
         // Resume fetching
         if (mapLoaded) startBackgroundTasks();
       }
@@ -659,6 +755,7 @@
       refreshTerminator();
       if (flightsEnabled) fetchFlights(true);
       if (weatherEnabled) fetchRadar();
+      if (windEnabled) fetchWind();
 
       timers.push(setInterval(function () {
         if (!appPaused && flightsEnabled) fetchFlights(true);
@@ -671,6 +768,10 @@
       timers.push(setInterval(function () {
         if (!appPaused) refreshTerminator();
       }, REFRESH.terminator));
+
+      timers.push(setInterval(function () {
+        if (!appPaused && windEnabled) fetchWind();
+      }, REFRESH.wind));
     }
 
     function refreshTerminator() {
@@ -878,6 +979,34 @@
         });
       }
 
+      // --- Wind streamlines ---
+      if (!map.getSource('wind')) {
+        map.addSource('wind', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      }
+      if (!map.getLayer('wind-layer')) {
+        map.addLayer({
+          id: 'wind-layer',
+          type: 'line',
+          source: 'wind',
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round',
+            'visibility': windEnabled ? 'visible' : 'none'
+          },
+          paint: {
+            'line-color': [
+              'interpolate', ['linear'], ['get', 'speed'],
+              0, 'rgba(150,195,255,0.35)',
+              8, 'rgba(195,230,255,0.65)',
+              18, 'rgba(255,240,205,0.9)'
+            ],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.9, 6, 1.3, 10, 2],
+            'line-dasharray': WIND_DASH_SEQUENCE[0]
+          }
+        });
+      }
+      if (windField) rebuildStreamlines();
+
       // --- Weather radar (RainViewer) ---
       // Source is created lazily once a live tile path has been resolved.
       if (radarTileUrl) applyRadarUrl(radarTileUrl);
@@ -993,6 +1122,10 @@
       // panning or spinning has to pull in the newly visible area. fetchFlights
       // rate-limits itself.
       if (map.getZoom() >= FLIGHTS_GLOBAL_ZOOM) fetchFlights();
+      if (windEnabled && windField && windZoomAtBuild !== null &&
+          Math.abs(map.getZoom() - windZoomAtBuild) > 0.3) {
+        rebuildStreamlines();
+      }
       if (spinning) return;
       applyNightBlend();
     });
@@ -1006,6 +1139,7 @@
       // Restore the rest of the persisted state.
       if (flightsEnabled) startFlightAnimation();
       if (spinEnabledInitial) window.setSpinEnabled(true);
+      if (windEnabled) { fetchWind(); startWindAnimation(); }
       if (savedFlag('pollen-enabled', false)) window.setPollenEnabled(true);
 
       // Start background tasks (flights, radar, terminator)
@@ -1085,6 +1219,140 @@
         flightAnimInterval = setInterval(renderFlightPositions, FLIGHT_RENDER_MS);
       }
     }
+
+    // --- Wind (Open-Meteo, primary view only) ---
+
+    // Mapbox's canonical dash-offset cycle; stepping through it makes the
+    // streamlines appear to flow along their own direction.
+    var WIND_DASH_SEQUENCE = [
+      [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5], [2, 4, 1],
+      [2.5, 4, 0.5], [3, 4, 0], [0, 0.5, 3, 3.5], [0, 1, 3, 3],
+      [0, 1.5, 3, 2.5], [0, 2, 3, 2], [0, 2.5, 3, 1.5], [0, 3, 3, 1],
+      [0, 3.5, 3, 0.5]
+    ];
+    var windDashStep = 0;
+    var windDashInterval = null;
+    var windZoomAtBuild = null;
+
+    function startWindAnimation() {
+      if (windDashInterval) return;
+      windDashInterval = setInterval(function () {
+        if (appPaused || !windEnabled || !map.getLayer('wind-layer')) return;
+        windDashStep = (windDashStep + 1) % WIND_DASH_SEQUENCE.length;
+        try {
+          map.setPaintProperty('wind-layer', 'line-dasharray', WIND_DASH_SEQUENCE[windDashStep]);
+        } catch (e) { }
+      }, 80);
+    }
+
+    function stopWindAnimation() {
+      if (windDashInterval) { clearInterval(windDashInterval); windDashInterval = null; }
+    }
+
+    function fetchWind() {
+      if (!mapLoaded || appPaused || !windEnabled) return;
+      if (!window.isPrimaryView) return;
+
+      var south, west, north, east;
+      if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) {
+        south = -60; west = -180; north = 75; east = 180;
+      } else {
+        var b = map.getBounds();
+        south = b.getSouth(); west = b.getWest();
+        north = b.getNorth(); east = b.getEast();
+      }
+
+      var lats = [], lons = [];
+      for (var row = 0; row < WIND_GRID_ROWS; row++) {
+        for (var col = 0; col < WIND_GRID_COLS; col++) {
+          lats.push((south + (north - south) * row / (WIND_GRID_ROWS - 1)).toFixed(3));
+          lons.push((west + (east - west) * col / (WIND_GRID_COLS - 1)).toFixed(3));
+        }
+      }
+
+      var url = 'https://api.open-meteo.com/v1/forecast' +
+        '?latitude=' + lats.join(',') +
+        '&longitude=' + lons.join(',') +
+        '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms';
+
+      fetch(url)
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          var list = Array.isArray(data) ? data : [data];
+          var u = new Float32Array(list.length);
+          var v = new Float32Array(list.length);
+          for (var i = 0; i < list.length; i++) {
+            var cur = list[i] && list[i].current;
+            var c = windComponents(
+              (cur && cur.wind_speed_10m) || 0,
+              (cur && cur.wind_direction_10m) || 0
+            );
+            u[i] = c.u; v[i] = c.v;
+          }
+          applyWindField({
+            south: south, west: west, north: north, east: east,
+            cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
+            u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
+          });
+          try {
+            webkit.messageHandlers.dataRelay.postMessage({
+              type: 'wind',
+              json: JSON.stringify({
+                south: south, west: west, north: north, east: east,
+                cols: WIND_GRID_COLS, rows: WIND_GRID_ROWS,
+                u: Array.prototype.slice.call(u), v: Array.prototype.slice.call(v)
+              })
+            });
+          } catch (e) { }
+        })
+        .catch(function (err) { console.warn('[Wind]', err.message || err); });
+    }
+
+    function applyWindField(raw) {
+      windField = new WindField(
+        raw.south, raw.west, raw.north, raw.east,
+        raw.cols, raw.rows, raw.u, raw.v
+      );
+      rebuildStreamlines();
+    }
+
+    window.receiveWind = function (raw) {
+      if (window.isPrimaryView) return;
+      applyWindField(raw);
+    };
+
+    function rebuildStreamlines() {
+      if (!windField || !map.getSource('wind')) return;
+      // Pick the integration step so a WIND_REFERENCE_SPEED wind draws roughly
+      // WIND_TARGET_PX of line, whatever the zoom.
+      var pixelsPerDegree = 512 * Math.pow(2, map.getZoom()) / 360;
+      var targetDegrees = WIND_TARGET_PX / pixelsPerDegree;
+      var stepSeconds =
+        (targetDegrees * METERS_PER_DEGREE / WIND_REFERENCE_SPEED) / WIND_STEPS;
+
+      windZoomAtBuild = map.getZoom();
+      map.getSource('wind').setData(
+        buildStreamlines(windField, WIND_STREAMLINES, WIND_STEPS, stepSeconds)
+      );
+    }
+
+    window.setWindEnabled = function (on) {
+      windEnabled = on;
+      localStorage.setItem('wind-enabled', on ? '1' : '0');
+      if (!mapLoaded) return;
+      if (map.getLayer('wind-layer')) {
+        map.setLayoutProperty('wind-layer', 'visibility', on ? 'visible' : 'none');
+      }
+      if (on) {
+        if (windField) rebuildStreamlines(); else fetchWind();
+        startWindAnimation();
+      } else {
+        stopWindAnimation();
+      }
+    };
 
     // --- Weather radar (RainViewer, primary view only) ---
     function fetchRadar() {
