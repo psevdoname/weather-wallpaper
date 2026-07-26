@@ -291,6 +291,28 @@
     }, 'image/png');
   }
 
+  // Timers on a page WebKit considers hidden are throttled hard; timers inside
+  // a Worker are not. Everything that needs a steady beat uses this.
+  function createTicker(intervalMs, onTick) {
+    var worker = null, timer = null;
+    try {
+      var source = 'var t=setInterval(function(){postMessage(0);},' + intervalMs + ');' +
+                   'onmessage=function(){clearInterval(t);close();};';
+      worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
+      worker.onmessage = onTick;
+    } catch (e) {
+      worker = null;
+      timer = setInterval(onTick, intervalMs);
+    }
+    return {
+      stop: function () {
+        if (worker) { worker.terminate(); worker = null; }
+        if (timer) { clearInterval(timer); timer = null; }
+      },
+      isWorker: function () { return worker !== null; }
+    };
+  }
+
   function normalizeLon(lon) {
     while (lon > 180) lon -= 360;
     while (lon < -180) lon += 360;
@@ -610,7 +632,7 @@
           spinEnabled: spinEnabled,
           spinning: spinning,
           timerRunning: spinTimer !== null,
-          workerDriven: spinWorker !== null,
+          workerDriven: spinWorker !== null && spinWorker.isWorker(),
           pixelsPerSec: spinPixelsPerSec,
           degPerSec: currentSpinSpeed(),
           frames: spinFrameCount,
@@ -623,6 +645,7 @@
           fieldIsGlobal: windFieldIsGlobal,
           particles: windParticles.length,
           tickRunning: !!windTickInterval,
+          tickIsWorker: windTickInterval ? windTickInterval.isWorker() : null,
           layerExists: !!map.getLayer('wind-layer'),
           layerVisibility: map.getLayer('wind-layer')
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
@@ -788,25 +811,12 @@
       lastSpinRender = performance.now();
       if (!spinStartedAt) spinStartedAt = lastSpinRender;
 
-      if (!spinWorker) {
-        try {
-          var source = 'var t=null;onmessage=function(e){' +
-            'if(e.data.stop){clearInterval(t);t=null;return;}' +
-            'clearInterval(t);t=setInterval(function(){postMessage(0);},e.data.interval);};';
-          spinWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-          spinWorker.onmessage = function () { if (spinning) spinStep(); };
-          spinWorker.postMessage({ interval: SPIN_INTERVAL_MS });
-          return;
-        } catch (e) {
-          spinWorker = null;   // fall back to a plain timer
-        }
-      }
-      spinTimer = setInterval(spinStep, SPIN_INTERVAL_MS);
+      spinWorker = createTicker(SPIN_INTERVAL_MS, function () { if (spinning) spinStep(); });
     }
 
     function stopSpinLoop() {
+      if (spinWorker) { spinWorker.stop(); spinWorker = null; }
       if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
-      if (spinWorker) { spinWorker.terminate(); spinWorker = null; }
     }
 
     function runCameraAnimation(options) {
@@ -1468,18 +1478,9 @@
         p.speed = 0;
     }
 
-    var windTickSkip = 0;
-
     function windTick() {
       if (appPaused || !windEnabled || !windField || !map.getSource('wind')) return;
 
-      // Rebuilding 2600 trails competes with the spin for the main thread, and
-      // while the globe is turning the particles' own motion is barely legible
-      // anyway — so halve the update rate rather than starve the rotation.
-      if (spinning) {
-        windTickSkip = (windTickSkip + 1) % 2;
-        if (windTickSkip !== 0) return;
-      }
 
       while (windParticles.length < WIND_PARTICLES) {
         var fresh = {};
@@ -1540,11 +1541,11 @@
 
     function startWindAnimation() {
       if (windTickInterval) return;
-      windTickInterval = setInterval(windTick, WIND_TICK_MS);
+      windTickInterval = createTicker(WIND_TICK_MS, windTick);
     }
 
     function stopWindAnimation() {
-      if (windTickInterval) { clearInterval(windTickInterval); windTickInterval = null; }
+      if (windTickInterval) { windTickInterval.stop(); windTickInterval = null; }
       windParticles = [];
     }
 

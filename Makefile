@@ -1,5 +1,8 @@
 APP_NAME = WeatherWallpaper
-BUILD_DIR = build
+# Built outside iCloud on purpose: iCloud puts com.apple.FinderInfo on the
+# bundle, which codesign rejects, and an unsigned-with-plist bundle never gets
+# a location permission prompt from TCC.
+BUILD_DIR ?= $(HOME)/Library/Caches/weather-wallpaper-build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS = $(CONTENTS)/MacOS
@@ -32,6 +35,18 @@ $(APP_BUNDLE): $(SWIFT_FILES) WeatherWallpaper/Web/* WeatherWallpaper/Info.plist
 	     -e 's/$$(MACOSX_DEPLOYMENT_TARGET)/13.0/g' \
 	     WeatherWallpaper/Info.plist > $(CONTENTS)/Info.plist
 	@cp -R WeatherWallpaper/Web/* $(RESOURCES)/Web/
+	@# iCloud leaves xattrs and .DS_Store inside the bundle, which codesign
+	@# rejects as "resource fork, Finder information, or similar detritus".
+	@find $(APP_BUNDLE) -name '.DS_Store' -delete
+	@xattr -d com.apple.FinderInfo $(APP_BUNDLE) 2>/dev/null || true
+	@xattr -d com.apple.FinderInfo $(CONTENTS) 2>/dev/null || true
+	@# Sign with the real bundle id and entitlements. Without this the linker's
+	@# ad-hoc signature leaves Info.plist unbound, so TCC never sees
+	@# NSLocationWhenInUseUsageDescription and the location prompt never appears.
+	@codesign --force --sign - \
+		--identifier com.weatherwallpaper.app \
+		--entitlements WeatherWallpaper/WeatherWallpaper.entitlements \
+		$(APP_BUNDLE)
 	@echo "Built: $(APP_BUNDLE)"
 
 run: $(APP_BUNDLE)
