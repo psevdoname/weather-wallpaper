@@ -113,9 +113,11 @@
   // Swift instead, which is free and far denser.
   var WIND_GRID_COLS = 14;
   var WIND_GRID_ROWS = 10;
-  var WIND_PARTICLES = 1300;
-  var WIND_TRAIL = 9;               // positions kept per particle
-  var WIND_TICK_MS = 85;
+  // Many thin short strokes read as a flowing field; fewer thick long ones
+  // read as sausages.
+  var WIND_PARTICLES = 2600;
+  var WIND_TRAIL = 6;               // positions kept per particle
+  var WIND_TICK_MS = 90;
   var WIND_MAX_AGE = 110;           // ticks before a particle is reseeded, so
                                     // they don't all pile into convergence zones
   var WIND_PX_PER_SEC = 45;         // on-screen speed of a reference wind
@@ -289,8 +291,15 @@
     }, 'image/png');
   }
 
+  function normalizeLon(lon) {
+    while (lon > 180) lon -= 360;
+    while (lon < -180) lon += 360;
+    return lon;
+  }
+
   // A sampled wind field over a regular lat/lon grid.
-  function WindField(south, west, north, east, cols, rows, u, v) {
+  function WindField(south, west, north, east, cols, rows, u, v, wraps) {
+    this.wraps = !!wraps;
     this.south = south; this.west = west;
     this.cols = cols; this.rows = rows;
     this.dLat = (north - south) / (rows - 1);
@@ -302,12 +311,20 @@
   WindField.prototype.sample = function (lat, lon) {
     var x = (lon - this.west) / this.dLon;
     var y = (lat - this.south) / this.dLat;
-    if (!(x >= 0 && y >= 0 && x <= this.cols - 1 && y <= this.rows - 1)) return null;
+    // A global field wraps: the column after the last one is the first.
+    if (this.wraps) {
+      x = x % this.cols;
+      if (x < 0) x += this.cols;
+    }
+    if (!(y >= 0 && y <= this.rows - 1)) return null;
+    if (!this.wraps && !(x >= 0 && x <= this.cols - 1)) return null;
 
     var x0 = Math.floor(x), y0 = Math.floor(y);
-    var x1 = Math.min(x0 + 1, this.cols - 1), y1 = Math.min(y0 + 1, this.rows - 1);
+    var x1 = this.wraps ? x0 + 1 : Math.min(x0 + 1, this.cols - 1);
+    var y1 = Math.min(y0 + 1, this.rows - 1);
     var fx = x - x0, fy = y - y0;
 
+    if (this.wraps) { x1 = x1 % this.cols; }
     var i00 = y0 * this.cols + x0, i10 = y0 * this.cols + x1;
     var i01 = y1 * this.cols + x0, i11 = y1 * this.cols + x1;
 
@@ -999,7 +1016,11 @@
 
       // --- Wind streamlines ---
       if (!map.getSource('wind')) {
-        map.addSource('wind', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addSource('wind', {
+          type: 'geojson',
+          lineMetrics: true,          // required for line-gradient
+          data: { type: 'FeatureCollection', features: [] }
+        });
       }
       if (!map.getLayer('wind-layer')) {
         map.addLayer({
@@ -1012,14 +1033,16 @@
             'visibility': windEnabled ? 'visible' : 'none'
           },
           paint: {
-            'line-color': [
-              'interpolate', ['linear'], ['get', 'speed'],
-              0, 'rgba(150,195,255,0.35)',
-              8, 'rgba(195,230,255,0.65)',
-              18, 'rgba(255,240,205,0.9)'
+            // Trails run oldest -> newest, so the gradient fades in towards
+            // the head. This is what separates a comet from a sausage.
+            'line-gradient': [
+              'interpolate', ['linear'], ['line-progress'],
+              0, 'rgba(130,180,255,0)',
+              0.55, 'rgba(180,220,255,0.30)',
+              1, 'rgba(240,250,255,0.95)'
             ],
-            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.2, 6, 1.6, 10, 2.4],
-            'line-opacity': 0.85
+            'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.7, 6, 1.0, 10, 1.5],
+            'line-opacity': 0.9
           }
         });
       }
@@ -1330,9 +1353,16 @@
         var north = south + windField.dLat * (windField.rows - 1);
         var east = west + windField.dLon * (windField.cols - 1);
 
-        // getBounds is unreliable under the globe projection, so only clamp to
-        // the viewport once we're zoomed in enough for it to be meaningful.
-        if (map.getZoom() >= FLIGHTS_GLOBAL_ZOOM) {
+        // On the globe half the planet faces away, so seeding across the whole
+        // field wastes half the particles. getBounds is unreliable there, but
+        // the visible hemisphere is simply the region around the centre.
+        if (map.getZoom() < FLIGHTS_GLOBAL_ZOOM) {
+          var c = map.getCenter();
+          south = Math.max(south, c.lat - 75);
+          north = Math.min(north, c.lat + 75);
+          west = c.lng - 85;
+          east = c.lng + 85;
+        } else if (map.getZoom() >= FLIGHTS_GLOBAL_ZOOM) {
           try {
             var b = map.getBounds();
             south = Math.max(south, b.getSouth());
@@ -1348,7 +1378,7 @@
         }
 
         p.lat = south + Math.random() * (north - south);
-        p.lon = west + Math.random() * (east - west);
+        p.lon = normalizeLon(west + Math.random() * (east - west));
         p.trail = [];
         p.age = Math.floor(Math.random() * WIND_MAX_AGE);
         p.speed = 0;
@@ -1376,6 +1406,8 @@
         var cosLat = Math.cos(p.lat * DEG);
         if (!w || p.age > WIND_MAX_AGE || cosLat < 0.05) { seedParticle(p); continue; }
 
+        var previous = p.trail.length ? p.trail[p.trail.length - 1] : null;
+        if (previous && Math.abs(p.lon - previous[0]) > 180) p.trail = [];
         p.trail.push([p.lon, p.lat]);
         if (p.trail.length > WIND_TRAIL) p.trail.shift();
 
@@ -1391,7 +1423,7 @@
         var dt = tickSeconds * baseScale * gain;
 
         p.lat += (w.v * dt) / METERS_PER_DEGREE;
-        p.lon += (w.u * dt) / (METERS_PER_DEGREE * cosLat);
+        p.lon = normalizeLon(p.lon + (w.u * dt) / (METERS_PER_DEGREE * cosLat));
         p.age++;
 
         if (p.trail.length > 1) {
@@ -1530,7 +1562,7 @@
       windFieldIsGlobal = !!raw.global;
       windField = new WindField(
         raw.south, raw.west, raw.north, raw.east,
-        raw.cols, raw.rows, raw.u, raw.v
+        raw.cols, raw.rows, raw.u, raw.v, raw.global
       );
       rebuildStreamlines();
     }
