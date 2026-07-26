@@ -628,6 +628,9 @@
         } catch (e) { out.styleError = e.message || String(e); }
         try {
         out.renderFps = renderCount / ((performance.now() - renderCountStart) / 1000);
+        out.lastCameraRequest = lastCameraRequest;
+        out.mapCenter = [map.getCenter().lng, map.getCenter().lat];
+        out.mapZoom = map.getZoom();
         out.spin = {
           spinEnabled: spinEnabled,
           spinning: spinning,
@@ -691,6 +694,7 @@
           webkit.messageHandlers.dataRelay.postMessage({ type: 'debug', json: JSON.stringify(out, null, 2) });
         } catch (e) { }
       }, 6000);
+      if (!diagnosticsRepeat) diagnosticsRepeat = setInterval(reportStyleDiagnostics, 15000);
     }
 
     function applyMapFeatures() {
@@ -790,6 +794,7 @@
     var lastSpinRender = 0;
     var spinFrameCount = 0;
     var spinStartedAt = 0;
+    var diagnosticsRepeat = null;
     var renderCount = 0;
     var renderCountStart = performance.now();
     var spinLonTravelled = 0;
@@ -819,7 +824,15 @@
       if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
     }
 
+    var lastCameraRequest = null;
+
     function runCameraAnimation(options) {
+      lastCameraRequest = {
+        at: new Date().toISOString(),
+        center: options.center || null,
+        zoom: options.zoom,
+        spinningBefore: spinning
+      };
       var resumeAfter = spinning;
       if (resumeAfter) {
         spinning = false;
