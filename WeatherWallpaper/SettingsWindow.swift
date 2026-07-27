@@ -50,6 +50,11 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("#E64DFF", "Magenta"),
     ]
 
+    private static let radarStyles: [(id: String, name: String)] = [
+        ("colour", "Colour — weather-map style"),
+        ("dark", "Dark — rain-bearing cloud"),
+    ]
+
     private static let windUnits: [(id: String, name: String)] = [
         ("auto", "Match units setting"),
         ("ms", "m/s"),
@@ -140,6 +145,10 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             selected: Self.flightColors.firstIndex { $0.hex == currentFlightColor } ?? 0,
             action: #selector(flightColorChanged(_:))))
         stack.addArrangedSubview(checkbox("Weather radar", key: "radar-enabled", action: #selector(radarToggled(_:))))
+        stack.addArrangedSubview(popupRow(
+            "Rain look", Self.radarStyles.map(\.name),
+            selected: Self.radarStyles.firstIndex { $0.id == currentRadarStyle } ?? 0,
+            action: #selector(radarStyleChanged(_:))))
         stack.addArrangedSubview(checkbox("Wind", key: "wind-enabled", action: #selector(windToggled(_:))))
         stack.addArrangedSubview(popupRow(
             "Wind density", Self.windDensities.map(\.name),
@@ -229,6 +238,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     // MARK: - Current values
 
     private var currentStyleId: String { defaults.string(forKey: "map-style") ?? "faded" }
+    private var currentRadarStyle: String { defaults.string(forKey: "radar-style") ?? "colour" }
+
     private var currentWindDensity: Int { defaults.object(forKey: "wind-density") as? Int ?? 2600 }
 
     private var currentWindUnit: String { defaults.string(forKey: "wind-unit") ?? "auto" }
@@ -257,6 +268,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         let on = sender.state == .on
         defaults.set(on, forKey: "feature-\(key)")
         manager.injectMapFeature(key, on)
+    }
+
+    @objc private func radarStyleChanged(_ sender: NSPopUpButton) {
+        let id = Self.radarStyles[sender.indexOfSelectedItem].id
+        defaults.set(id, forKey: "radar-style")
+        manager.injectRadarStyle(id)
     }
 
     @objc private func windDensityChanged(_ sender: NSPopUpButton) {

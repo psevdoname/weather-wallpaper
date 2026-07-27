@@ -480,6 +480,7 @@
     if (Number.isNaN(spinPixelsPerSec)) spinPixelsPerSec = 26;
     var nightLightsEnabled = savedFlag('night-lights', false);
     var windEnabled = savedFlag('wind-enabled', false);
+    var radarStyle = localStorage.getItem('radar-style') || 'colour';
     var windDensity = parseInt(localStorage.getItem('wind-density'), 10);
     if (!windDensity || windDensity < 200) windDensity = WIND_PARTICLES;
     var flightColor = localStorage.getItem('flight-color') || palette.accent;
@@ -1311,7 +1312,7 @@
       }
 
       // --- OpenWeatherMap overlays (clouds, temperature) ---
-      addOwmLayer('clouds', 'clouds_new', 0.55);
+      addOwmLayer('clouds', 'clouds_new', 0.45);
       addOwmLayer('temperature', 'temp_new', 0.5);
 
       // --- Wind streamlines ---
@@ -1627,7 +1628,7 @@
         map.setLayoutProperty(layerId, 'visibility', on ? 'visible' : 'none');
       } else if (on) {
         // Key may have arrived after the style loaded.
-        addOwmLayer('clouds', 'clouds_new', 0.55);
+        addOwmLayer('clouds', 'clouds_new', 0.45);
         addOwmLayer('temperature', 'temp_new', 0.5);
       }
     }
@@ -2023,6 +2024,39 @@
         .catch(function (err) { console.warn('[Radar]', err.message || err); });
     }
 
+    // RainViewer ignores its colour-scheme parameter (every scheme returns a
+    // byte-identical tile), so the darkening is done at paint time instead.
+    // Over the cloud layer this reads as heavy rain-bearing cloud rather than
+    // as a weather-map overlay.
+    var RADAR_PAINT = {
+      colour: {
+        'raster-opacity': 0.5,
+        'raster-brightness-max': 1,
+        'raster-saturation': 0,
+        'raster-contrast': 0
+      },
+      dark: {
+        'raster-opacity': 0.75,
+        'raster-brightness-max': 0.35,
+        'raster-saturation': -0.35,
+        'raster-contrast': 0.25
+      }
+    };
+
+    function applyRadarPaint() {
+      var paint = RADAR_PAINT[radarStyle] || RADAR_PAINT.colour;
+      if (!map.getLayer('radar-layer')) return;
+      for (var key in paint) {
+        try { map.setPaintProperty('radar-layer', key, paint[key]); } catch (e) { }
+      }
+    }
+
+    window.setRadarStyle = function (style) {
+      radarStyle = RADAR_PAINT[style] ? style : 'colour';
+      localStorage.setItem('radar-style', radarStyle);
+      applyRadarPaint();
+    };
+
     function applyRadarUrl(tileUrl) {
       radarTileUrl = tileUrl;
       var src = map.getSource('radar');
@@ -2035,9 +2069,10 @@
       map.addSource('radar', { type: 'raster', tiles: [tileUrl], tileSize: 256, maxzoom: 7 });
       map.addLayer({
         id: 'radar-layer', type: 'raster', source: 'radar',
-        paint: { 'raster-opacity': 0.5 },
+        paint: RADAR_PAINT[radarStyle] || RADAR_PAINT.colour,
         layout: { 'visibility': weatherEnabled ? 'visible' : 'none' }
       });
+      applyRadarPaint();
     }
 
     // Receiver for radar URL relayed from primary view

@@ -7,7 +7,7 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 ## Features
 
 - **3D Globe** — rendered as your desktop wallpaper
-- **Map Styles** — seven switchable basemap styles
+- **Map Styles** — eight basemaps, including NASA's daily imagery so the globe shows the real snow line, sea ice and cloud cover for today
 - **City Lights at Night** — NASA VIIRS Black Marble imagery, faded in by real solar elevation
 - **Day/Night Cycle** — real-time sun position with twilight and night overlays
 - **Weather Radar** — live precipitation overlay via RainViewer (no API key needed)
@@ -73,6 +73,7 @@ without the menu closing after each click:
 | Wind speed | m/s, km/h, mph, knots, or match the units setting |
 | Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
+| Rain look | Colour weather-map style, or dark rain-bearing cloud |
 | Wind | Live 10m wind as moving particles |
 | Wind density | Light / Medium / Dense / Very dense — the main lever on smoothness |
 | Clouds / Temperature | Global overlays (needs an OpenWeather key) |
