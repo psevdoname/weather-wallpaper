@@ -173,6 +173,13 @@
   var WIND_PX_PER_SEC = 30;         // on-screen speed of a reference wind
   var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field
   var METERS_PER_DEGREE = 111320;
+  // Meridians converge at the poles, so a fixed ground speed becomes a huge
+  // longitude step: x5.8 at 80 degrees, x11.5 at 85, x57 at 89. Particles that
+  // far north whip around the pole and read as a flickering ring, so they are
+  // simply not simulated there. Polar surface wind is slow and featureless
+  // anyway.
+  var WIND_MAX_LAT = 78;
+  var WIND_MAX_STEP_DEG = 4;
 
   var mapContainer = document.getElementById('globe-map');
   var token = getMapboxToken();
@@ -1731,6 +1738,9 @@
           east = west + windField.dLon * (windField.cols - 1);
         }
 
+        if (south < -WIND_MAX_LAT) south = -WIND_MAX_LAT;
+        if (north > WIND_MAX_LAT) north = WIND_MAX_LAT;
+        if (north <= south) { south = -WIND_MAX_LAT; north = WIND_MAX_LAT; }
         p.lat = south + Math.random() * (north - south);
         p.lon = normalizeLon(west + Math.random() * (east - west));
         p.trail = [];
@@ -1800,7 +1810,9 @@
         var p = windParticles[i];
         var w = windField.sample(p.lat, p.lon);
         var cosLat = Math.cos(p.lat * DEG);
-        if (!w || p.age > WIND_MAX_AGE || cosLat < 0.05) { seedParticle(p); continue; }
+        if (!w || p.age > WIND_MAX_AGE || Math.abs(p.lat) > WIND_MAX_LAT) {
+          seedParticle(p); continue;
+        }
 
         var previous = p.trail.length ? p.trail[p.trail.length - 1] : null;
         if (previous && Math.abs(p.lon - previous[0]) > 180) p.trail = [];
@@ -1818,8 +1830,14 @@
           : 0;
         var dt = tickSeconds * baseScale * gain;
 
-        p.lat += (w.v * dt) / METERS_PER_DEGREE;
-        p.lon = normalizeLon(p.lon + (w.u * dt) / (METERS_PER_DEGREE * cosLat));
+        var stepLat = (w.v * dt) / METERS_PER_DEGREE;
+        var stepLon = (w.u * dt) / (METERS_PER_DEGREE * cosLat);
+        // Belt and braces: never let one tick jump further than this, whatever
+        // the latitude, so a particle can't smear across the map.
+        if (stepLon > WIND_MAX_STEP_DEG) stepLon = WIND_MAX_STEP_DEG;
+        else if (stepLon < -WIND_MAX_STEP_DEG) stepLon = -WIND_MAX_STEP_DEG;
+        p.lat += stepLat;
+        p.lon = normalizeLon(p.lon + stepLon);
         p.age++;
 
         if (p.trail.length > 1 && isOnScreen(p.lat, p.lon)) lines.push(p.trail.slice());
