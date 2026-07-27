@@ -24,6 +24,43 @@
 
   // ==================== MAP STYLES ====================
 
+  // NASA publishes yesterday's true-colour imagery daily. Unlike a satellite
+  // basemap — a cloud-free mosaic stitched mostly from summer scenes, hence its
+  // permanent green Chukotka and missing polar ice — this shows the world as it
+  // actually is today: snow line, sea ice and the day's cloud cover.
+  var GIBS_BASE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/';
+
+  function gibsDate(daysAgo) {
+    var d = new Date(Date.now() - daysAgo * 86400000);
+    return d.getUTCFullYear() + '-' +
+      String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getUTCDate()).padStart(2, '0');
+  }
+
+  function rasterStyle(tileUrl, maxzoom, attribution, background) {
+    return {
+      version: 8,
+      glyphs: 'mapbox://fonts/mapbox/{fontstack}/{range}.pbf',
+      sources: {
+        'basemap-raster': {
+          type: 'raster', tiles: [tileUrl], tileSize: 256,
+          maxzoom: maxzoom, attribution: attribution
+        }
+      },
+      layers: [
+        { id: 'background', type: 'background', paint: { 'background-color': background } },
+        { id: 'basemap-raster-layer', type: 'raster', source: 'basemap-raster' }
+      ]
+    };
+  }
+
+  function todayImageryStyle() {
+    // Yesterday, because the current day is still being assembled.
+    var url = GIBS_BASE + 'VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/' +
+      gibsDate(1) + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpeg';
+    return rasterStyle(url, 9, 'NASA GIBS / VIIRS', '#050810');
+  }
+
   // labelColor / haloColor / haloWidth style the custom place-label layers,
   // which have to stay legible across light, dark and imagery basemaps.
   var STYLES = [
@@ -54,6 +91,12 @@
     {
       id: 'satellite', name: 'Satellite',
       url: 'mapbox://styles/mapbox/standard-satellite',
+      config: {},
+      labelColor: 'rgba(255,255,255,0.85)', haloColor: 'rgba(0,0,0,0.65)', haloWidth: 1
+    },
+    {
+      id: 'today', name: 'Satellite · Today',
+      style: todayImageryStyle(),
       config: {},
       labelColor: 'rgba(255,255,255,0.85)', haloColor: 'rgba(0,0,0,0.65)', haloWidth: 1
     },
@@ -504,7 +547,11 @@
       applyStyleConfig();
       try { map.setProjection('globe'); } catch (e) { }
       reportStyleDiagnostics();
-      map.on('render', function () { renderCount++; });
+      map.on('render', function () {
+        renderCount++;
+        renderTimes.push(performance.now());
+        if (renderTimes.length > 400) renderTimes.shift();
+      });
       addCustomLayers();
       reapplyToggles();
       applyNightBlend();
@@ -677,7 +724,31 @@
         out.mapLoaded = mapLoaded;
         out.mapErrors = mapErrors;
         out.jsErrors = (window.__jsErrors || []).slice(0, 5);
-        out.renderFps = renderCount / ((performance.now() - renderCountStart) / 1000);
+        // Frames over the last few seconds. Averaging since load mixed in the
+        // idle period before the spin started and understated everything.
+        var nowMs = performance.now();
+        var recent = renderTimes.filter(function (t) { return nowMs - t < 5000; });
+        out.renderFps = recent.length / 5;
+        out.renderFpsSinceLoad = renderCount / ((nowMs - renderCountStart) / 1000);
+        // If WebKit fell back to a software rasteriser, no amount of layer
+        // tuning would ever help — worth knowing before rewriting anything.
+        try {
+          var gl = map.painter && map.painter.context && map.painter.context.gl;
+          if (!gl) {
+            var probe = document.createElement('canvas');
+            gl = probe.getContext && (probe.getContext('webgl2') || probe.getContext('webgl'));
+          }
+          if (gl) {
+            var info = gl.getExtension('WEBGL_debug_renderer_info');
+            out.webgl = {
+              renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+              vendor: info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+              maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+            };
+          } else {
+            out.webgl = 'no context';
+          }
+        } catch (e) { out.webgl = 'probe failed: ' + ((e && e.message) || e); }
         out.lastCameraRequest = lastCameraRequest;
         out.cameraCalls = cameraCallCount;
         out.mapCenter = [map.getCenter().lng, map.getCenter().lat];
@@ -860,6 +931,7 @@
     var fetchWindCalls = 0;
     var globalWindPosts = 0;
     var renderCount = 0;
+    var renderTimes = [];
     var renderCountStart = performance.now();
     var spinLonTravelled = 0;
     var lastNightBlend = 0;

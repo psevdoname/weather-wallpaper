@@ -99,6 +99,26 @@ asserting the camera actually moves), and a dead animation subscriber. The
 Worker stub must deliver messages — every ticker runs on one, so a silent stub
 makes the test prove nothing.
 
+## Rendering ceiling (investigated, unresolved)
+
+The globe renders at roughly 11-22fps while spinning and that is the limit.
+Ruled out by measurement, so don't re-test these: WebGL is hardware (Apple GPU,
+not a software fallback); `pixelRatio` 1 or 0.75 changes nothing, so it is not
+fill rate; the window's desktop level is not throttled (normal level measures
+the same); layer composition barely matters (labels, night lights and wind each
+cost ~1fps); tick rate above ~40Hz makes it *worse*, since driving the camera
+faster than it paints only queues work; and painting synchronously via the
+private `map._render()` from the ticker does not raise the frame count either.
+
+The gap is between our steps and painted frames — ~21 camera moves per second
+produce ~11 renders. Untried alternatives: MapLibre GL, drawing particles in a
+deck.gl or custom WebGL layer so geometry is not re-meshed, or a native
+renderer.
+
+Measure rendered frames over a recent window, not since load: averaging since
+load mixes in the idle period before anything animates and understates
+everything.
+
 ## Traps that cost hours
 
 `var x = null` placed above a `function x(){}` **silently destroys the

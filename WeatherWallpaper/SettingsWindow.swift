@@ -14,6 +14,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("dusk", "Standard · Dusk"),
         ("night", "Standard · Night"),
         ("satellite", "Satellite"),
+        ("today", "Satellite · Today (live NASA)"),
         ("dark", "Dark"),
         ("classic", "Classic"),
     ]
