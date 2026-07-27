@@ -174,11 +174,13 @@
   var WIND_REFERENCE_SPEED = 5;     // m/s — near the median of a live 10m field
   var METERS_PER_DEGREE = 111320;
   // Meridians converge at the poles, so a fixed ground speed becomes a huge
-  // longitude step: x5.8 at 80 degrees, x11.5 at 85, x57 at 89. Particles that
-  // far north whip around the pole and read as a flickering ring, so they are
-  // simply not simulated there. Polar surface wind is slow and featureless
-  // anyway.
-  var WIND_MAX_LAT = 78;
+  // longitude step: x5.8 at 80 degrees, x11.5 at 85, x57 at 89. On the globe
+  // the projection compresses those degrees back, so the motion still looks
+  // right — the flicker came from steps exceeding 180 degrees, which tripped
+  // the antimeridian check and cleared the trail almost every tick. Clamping
+  // the step fixes that, so the latitude limit only has to keep particles off
+  // the singularity itself.
+  var WIND_MAX_LAT = 85;
   var WIND_MAX_STEP_DEG = 4;
 
   var mapContainer = document.getElementById('globe-map');
