@@ -1745,7 +1745,8 @@
         if (north <= south) { south = -WIND_MAX_LAT; north = WIND_MAX_LAT; }
         p.lat = south + Math.random() * (north - south);
         p.lon = normalizeLon(west + Math.random() * (east - west));
-        p.trail = [];
+        p.trail = p.trail || [];
+        p.trail.length = 0;
         p.age = Math.floor(Math.random() * WIND_MAX_AGE);
         p.speed = 0;
     }
@@ -1805,7 +1806,11 @@
       var tickSeconds = WIND_TICK_MS / 1000;
 
       var tickStart = performance.now();
-      var lines = [];
+      // Reused across ticks. Allocating a fresh GeoJSON tree eleven times a
+      // second — thousands of coordinate arrays each time — grew the WebView
+      // to several gigabytes; the collector never kept up.
+      var lines = windLines;
+      lines.length = 0;
       var culled = 0;
       prepareCulling();
       for (var i = 0; i < windParticles.length; i++) {
@@ -1817,9 +1822,15 @@
         }
 
         var previous = p.trail.length ? p.trail[p.trail.length - 1] : null;
-        if (previous && Math.abs(p.lon - previous[0]) > 180) p.trail = [];
-        p.trail.push([p.lon, p.lat]);
-        if (p.trail.length > WIND_TRAIL) p.trail.shift();
+        if (previous && Math.abs(p.lon - previous[0]) > 180) p.trail.length = 0;
+        if (p.trail.length >= WIND_TRAIL) {
+          // Recycle the oldest point instead of allocating a new pair.
+          var recycled = p.trail.shift();
+          recycled[0] = p.lon; recycled[1] = p.lat;
+          p.trail.push(recycled);
+        } else {
+          p.trail.push([p.lon, p.lat]);
+        }
 
         p.speed = Math.sqrt(w.u * w.u + w.v * w.v);
 
@@ -1842,7 +1853,7 @@
         p.lon = normalizeLon(p.lon + stepLon);
         p.age++;
 
-        if (p.trail.length > 1 && isOnScreen(p.lat, p.lon)) lines.push(p.trail.slice());
+        if (p.trail.length > 1 && isOnScreen(p.lat, p.lon)) lines.push(p.trail);
         else if (p.trail.length > 1) culled++;
       }
       var nowTick = performance.now();
@@ -1855,14 +1866,18 @@
       windCulledCount = culled;
       windLastFeatureCount = lines.length;
       var setDataStart = performance.now();
-      map.getSource('wind').setData({
-        type: 'Feature',
-        geometry: { type: 'MultiLineString', coordinates: lines },
-        properties: {}
-      });
+      windFeature.geometry.coordinates = lines;
+      map.getSource('wind').setData(windFeature);
       windComputeMs = computeMs;
       windSetDataMs = performance.now() - setDataStart;
     }
+
+    var windLines = [];
+    var windFeature = {
+      type: 'Feature',
+      geometry: { type: 'MultiLineString', coordinates: [] },
+      properties: {}
+    };
 
     var windTickAccumulator = 0;
 

@@ -165,6 +165,16 @@ because of this.
 CPU numbers here vary by ±30% between identical runs. Do not tune against a
 single measurement; only trust differences that are large and repeatable.
 
+## Memory
+
+Virtual size means nothing here — every macOS app reports ~420GB (Finder and
+Dock included). Watch RSS of the *WebContent* process, not the app process.
+
+Reuse the buffers handed to `setData`. Allocating a fresh GeoJSON tree eleven
+times a second — thousands of coordinate arrays — grew the WebView to 3.8GB and
+climbing; recycling the arrays holds it flat. Rough steady state now: bare map
+364MB, +night lights 541MB, +4000 wind particles ~1.4GB.
+
 ## Measuring performance
 
 `ps -o %cpu` reports a lifetime average and is useless here. Diff accumulated
