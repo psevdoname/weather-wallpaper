@@ -1,6 +1,12 @@
 (function () {
   'use strict';
 
+  var jsErrors = [];
+  window.addEventListener('error', function (e) {
+    jsErrors.push((e.message || 'error') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0));
+  });
+  window.__jsErrors = jsErrors;
+
   var PALETTES = [
     { name: 'gold', accent: '#C9A84C', accentRgb: 'rgb(201,168,76)' },
     { name: 'arctic', accent: '#4D8CC9', accentRgb: 'rgb(77,140,201)' },
@@ -75,13 +81,12 @@
   var NIGHTLIGHTS_URL_BASE =
     'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/' +
     'GoogleMapsCompatible_Level8/';
-  var NIGHTLIGHTS_TILES = NIGHTLIGHTS_URL_BASE + '{z}/{y}/{x}.png';
-  var NIGHTLIGHTS_MAX_OPACITY = 0.92;
+  var NIGHTLIGHTS_MAX_OPACITY = 1.0;
+  // Luminance window mapped to alpha: below the floor is unlit ground and goes
+  // fully transparent, above the ceiling is a city core at full strength.
+  var LIGHT_FLOOR = 18;
+  var LIGHT_CEIL = 90;
 
-  // Zoom at which we hand over from the terminator-masked global image to the
-  // sharper tiled layer. Above it the whole viewport is within roughly one
-  // local time, so a single global opacity is already correct.
-  var NIGHTLIGHTS_TILE_MINZOOM = 5;
 
   // Global mosaic: 16x16 tiles at z4 => 4096x4096 Web Mercator canvas (~4 MB,
   // fetched once and then served from cache).
@@ -208,6 +213,9 @@
     var canvas = document.createElement('canvas');
     canvas.width = BM_SIZE; canvas.height = BM_SIZE;
     var ctx = canvas.getContext('2d');
+    var tileCanvas = document.createElement('canvas');
+    tileCanvas.width = BM_TILE; tileCanvas.height = BM_TILE;
+    var tileCtx = tileCanvas.getContext('2d', { willReadFrequently: true });
     var side = 1 << BM_ZOOM;
     var total = side * side;
     var done = 0;
@@ -226,7 +234,22 @@
           var img = new Image();
           img.crossOrigin = 'anonymous';
           img.onload = function () {
-            ctx.drawImage(img, x * BM_TILE, y * BM_TILE, BM_TILE, BM_TILE);
+            // Turn brightness into alpha, per tile, so the work is spread over
+            // the loads. Black Marble is mostly black background with lit
+            // cities; keeping only the lit part lets the normal basemap stay
+            // visible underneath instead of being covered by a dark image.
+            tileCtx.clearRect(0, 0, BM_TILE, BM_TILE);
+            tileCtx.drawImage(img, 0, 0, BM_TILE, BM_TILE);
+            var tileData = tileCtx.getImageData(0, 0, BM_TILE, BM_TILE);
+            var px = tileData.data;
+            for (var i = 0; i < px.length; i += 4) {
+              var lum = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+              var a = (lum - LIGHT_FLOOR) / (LIGHT_CEIL - LIGHT_FLOOR);
+              if (a < 0) a = 0; else if (a > 1) a = 1;
+              px[i + 3] = Math.round(a * 255);
+            }
+            tileCtx.putImageData(tileData, 0, 0);
+            ctx.drawImage(tileCanvas, x * BM_TILE, y * BM_TILE);
             tileFinished();
           };
           img.onerror = function () {
@@ -293,6 +316,9 @@
 
   // Timers on a page WebKit considers hidden are throttled hard; timers inside
   // a Worker are not. Everything that needs a steady beat uses this.
+  // A single long-lived worker ticker with subscribers. Creating a worker per
+  // animation proved unreliable — short-lived ones stopped delivering after a
+  // second or so — while one that simply keeps running is rock solid.
   function createTicker(intervalMs, onTick) {
     var worker = null, timer = null;
     try {
@@ -445,11 +471,17 @@
     });
 
     var mapLoaded = false;
+    var mapErrors = [];
 
     // ==================== STYLE ====================
 
     // Fires on first load and again after every setStyle(), which wipes all
     // imperatively-added sources, layers and images.
+    map.on('error', function (e) {
+      var msg = (e && e.error && e.error.message) || (e && e.message) || 'map error';
+      if (mapErrors.length < 6) mapErrors.push(msg);
+    });
+
     map.on('style.load', function () {
       applyStyleConfig();
       try { map.setProjection('globe'); } catch (e) { }
@@ -566,9 +598,6 @@
       nightLightsEnabled = on;
       localStorage.setItem('night-lights', on ? '1' : '0');
       if (!mapLoaded) return;
-      if (map.getLayer('nightlights-layer')) {
-        map.setLayoutProperty('nightlights-layer', 'visibility', on ? 'visible' : 'none');
-      }
       if (map.getLayer('nightlights-global-layer')) {
         map.setLayoutProperty('nightlights-global-layer', 'visibility', on ? 'visible' : 'none');
       } else if (on) {
@@ -627,15 +656,25 @@
           out.totalLayers = (style.layers || []).length;
         } catch (e) { out.styleError = e.message || String(e); }
         try {
+        out.mapLoaded = mapLoaded;
+        out.mapErrors = mapErrors;
+        out.jsErrors = (window.__jsErrors || []).slice(0, 5);
         out.renderFps = renderCount / ((performance.now() - renderCountStart) / 1000);
         out.lastCameraRequest = lastCameraRequest;
+        out.cameraCalls = cameraCallCount;
         out.mapCenter = [map.getCenter().lng, map.getCenter().lat];
         out.mapZoom = map.getZoom();
         out.spin = {
           spinEnabled: spinEnabled,
           spinning: spinning,
-          timerRunning: spinTimer !== null,
-          workerDriven: spinWorker !== null && spinWorker.isWorker(),
+          tickerRunning: masterTicker !== null,
+          masterTicks: masterTickCount,
+          cameraAnimating: cameraAnimation !== null,
+          subscribers: tickSubscribers.length,
+          spinSubscribed: tickSubscribers.indexOf(spinTick) !== -1,
+          msSinceLastMasterTick: masterLastTickAt ? Math.round(performance.now() - masterLastTickAt) : null,
+          workerDriven: masterTicker ? masterTicker.isWorker() : false,
+          subscribers: tickSubscribers.length,
           pixelsPerSec: spinPixelsPerSec,
           degPerSec: currentSpinSpeed(),
           frames: spinFrameCount,
@@ -648,7 +687,7 @@
           fieldIsGlobal: windFieldIsGlobal,
           particles: windParticles.length,
           tickRunning: !!windTickInterval,
-          tickIsWorker: windTickInterval ? windTickInterval.isWorker() : null,
+          tickIsWorker: masterTicker ? masterTicker.isWorker() : null,
           layerExists: !!map.getLayer('wind-layer'),
           layerVisibility: map.getLayer('wind-layer')
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
@@ -763,9 +802,6 @@
       if (map.getLayer('radar-layer')) {
         map.setLayoutProperty('radar-layer', 'visibility', weatherEnabled ? 'visible' : 'none');
       }
-      if (map.getLayer('nightlights-layer')) {
-        map.setLayoutProperty('nightlights-layer', 'visibility', nightLightsEnabled ? 'visible' : 'none');
-      }
       if (map.getLayer('nightlights-global-layer')) {
         map.setLayoutProperty('nightlights-global-layer', 'visibility', nightLightsEnabled ? 'visible' : 'none');
       }
@@ -786,8 +822,6 @@
     // never focused, so WebKit treats the page as hidden and throttles rAF to
     // about 1.5 calls per second — which looked like stutter, and like a
     // stopped globe once the wind loop competed for the main thread.
-    var spinTimer = null;
-    var SPIN_INTERVAL_MS = 40;
     // Spin is specified in screen pixels per second rather than degrees, so it
     // feels the same on the globe and at street zoom (26 px/s is ~110s per
     // revolution on the globe view). Set from the menu bar.
@@ -805,47 +839,126 @@
     var NIGHT_BLEND_MS = 5000;
     // `spinEnabled` is what the user asked for; `spinning` is whether the loop
     // is currently running. They differ while a camera animation borrows the
-    // camera — spinStep calls setCenter every frame, which would otherwise
-    // cancel any flyTo in progress.
-    // Timers on a page WebKit considers hidden are throttled; timers inside a
-    // Worker are not. So the tick is generated in a worker and posted across.
-    var spinWorker = null;
+    // camera, since both drive the same map.
+    function spinTick() { if (spinning) spinStep(); }
 
     function startSpinLoop() {
-      if (spinTimer || spinWorker) return;
       lastSpinRender = performance.now();
       if (!spinStartedAt) spinStartedAt = lastSpinRender;
-
-      spinWorker = createTicker(SPIN_INTERVAL_MS, function () { if (spinning) spinStep(); });
+      subscribeTick(spinTick);
     }
 
     function stopSpinLoop() {
-      if (spinWorker) { spinWorker.stop(); spinWorker = null; }
-      if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
+      unsubscribeTick(spinTick);
     }
 
     var lastCameraRequest = null;
 
+    var MASTER_TICK_MS = 25;
+    var masterTicker = null;
+    var masterTickCount = 0;
+    var masterLastTickAt = 0;
+    var tickSubscribers = [];
+
+    // Started once and never stopped. Workers created on demand were being
+    // killed after a second or two; one that simply keeps running is stable,
+    // which is why the wind loop always worked and per-animation ones did not.
+    function startMasterTicker() {
+      if (masterTicker) return;
+      masterTicker = createTicker(MASTER_TICK_MS, function () {
+        masterTickCount++;
+        masterLastTickAt = performance.now();
+        for (var i = tickSubscribers.length - 1; i >= 0; i--) {
+          try { tickSubscribers[i](); } catch (e) { }
+        }
+      });
+    }
+
+    function subscribeTick(fn) {
+      if (typeof fn !== 'function') { console.warn('[Tick] ignoring non-function subscriber'); return; }
+      if (tickSubscribers.indexOf(fn) === -1) tickSubscribers.push(fn);
+      startMasterTicker();
+    }
+
+    function unsubscribeTick(fn) {
+      var index = tickSubscribers.indexOf(fn);
+      if (index !== -1) tickSubscribers.splice(index, 1);
+    }
+
+
+    // Mapbox animates the camera on requestAnimationFrame, which is throttled
+    // to ~1.5Hz on this window — a 2s flyTo then takes minutes and looks like
+    // the map ignoring the request entirely. Drive the interpolation ourselves
+    // off the worker ticker and apply each step with jumpTo.
+    var cameraCallCount = 0;
+    var cameraAnimation = null;
+
+    // Permanently subscribed; it simply does nothing when no animation is
+    // active. Subscribing and unsubscribing per animation turned out to be the
+    // thing that kept losing the camera mid-flight.
+    function cameraStep() {
+      var a = cameraAnimation;
+      if (!a) return;
+
+      a.request.ticks++;
+      var t = (performance.now() - a.startedAt) / a.duration;
+      a.request.lastT = t;
+      if (t > 1) t = 1;
+      var e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+      map.jumpTo({
+        center: [normalizeLon(a.from.lng + a.deltaLng * e),
+                 a.from.lat + (a.toLat - a.from.lat) * e],
+        zoom: a.fromZoom + (a.toZoom - a.fromZoom) * e
+      });
+
+      if (t >= 1) {
+        a.request.finishedAt = performance.now() - a.startedAt;
+        cameraAnimation = null;
+        if (a.resumeAfter && spinEnabled && !spinning) {
+          spinning = true;
+          startSpinLoop();
+        }
+      }
+    }
+
     function runCameraAnimation(options) {
-      lastCameraRequest = {
+      cameraCallCount++;
+      var request = {
+        call: cameraCallCount,
         at: new Date().toISOString(),
         center: options.center || null,
         zoom: options.zoom,
-        spinningBefore: spinning
+        spinningBefore: spinning,
+        ticks: 0
       };
-      var resumeAfter = spinning;
-      if (resumeAfter) {
+      lastCameraRequest = request;
+
+      var resumeAfter = spinning || (cameraAnimation && cameraAnimation.resumeAfter);
+      if (spinning) {
         spinning = false;
         stopSpinLoop();
       }
-      map.flyTo(options);
-      if (resumeAfter) {
-        setTimeout(function () {
-          if (!spinEnabled || spinning) return;
-          spinning = true;
-          startSpinLoop();
-        }, (options.duration || 0) + 150);
+
+      var from = map.getCenter();
+      var deltaLng = 0;
+      if (options.center) {
+        deltaLng = options.center[0] - from.lng;
+        while (deltaLng > 180) deltaLng -= 360;
+        while (deltaLng < -180) deltaLng += 360;
       }
+
+      cameraAnimation = {
+        request: request,
+        startedAt: performance.now(),
+        duration: options.duration || 1500,
+        from: from,
+        fromZoom: map.getZoom(),
+        toLat: options.center ? options.center[1] : from.lat,
+        toZoom: options.zoom != null ? options.zoom : map.getZoom(),
+        deltaLng: deltaLng,
+        resumeAfter: !!resumeAfter
+      };
     }
 
     window.setSpinEnabled = function (on) {
@@ -998,26 +1111,6 @@
       // Sits above the darkening fills so the lights are not dimmed by them.
       // Two layers split by zoom: a terminator-masked global image on the globe,
       // and sharper tiles once zoomed in.
-      if (!map.getSource('nightlights')) {
-        map.addSource('nightlights', {
-          type: 'raster',
-          tiles: [NIGHTLIGHTS_TILES],
-          tileSize: 256,
-          maxzoom: 8,
-          attribution: 'NASA GIBS / VIIRS Black Marble'
-        });
-      }
-      if (!map.getLayer('nightlights-layer')) {
-        map.addLayer({
-          id: 'nightlights-layer',
-          type: 'raster',
-          source: 'nightlights',
-          minzoom: NIGHTLIGHTS_TILE_MINZOOM,
-          paint: { 'raster-opacity': 0, 'raster-opacity-transition': { duration: 1500 } },
-          layout: { 'visibility': nightLightsEnabled ? 'visible' : 'none' }
-        });
-      }
-
       if (nightLightsEnabled) ensureGlobalNightLights();
 
       // --- Custom labels (replacing Standard style's white-halo labels) ---
@@ -1224,7 +1317,6 @@
               id: 'nightlights-global-layer',
               type: 'raster',
               source: 'nightlights-global',
-              maxzoom: NIGHTLIGHTS_TILE_MINZOOM,
               paint: {
                 'raster-opacity': NIGHTLIGHTS_MAX_OPACITY,
                 'raster-fade-duration': 0
@@ -1243,7 +1335,7 @@
     // viewport shares roughly one local time. The darkening fills are backed off
     // by the same amount so the two don't stack into pure black.
     function applyNightBlend() {
-      if (!map.getLayer('nightlights-layer')) return;
+      if (!map.getLayer('nightlights-global-layer')) return;
       var center = map.getCenter();
       var elevation = getSunElevation(center.lat, center.lng);
       // 0 at sunset, 1 once the sun is 12° below the horizon (nautical twilight).
@@ -1252,12 +1344,11 @@
         k = -elevation / 12;
         if (k < 0) k = 0; if (k > 1) k = 1;
       }
-      // Only dim the fills where the unmasked tiled layer is actually showing.
-      var tiled = map.getZoom() >= NIGHTLIGHTS_TILE_MINZOOM ? k : 0;
       try {
-        map.setPaintProperty('nightlights-layer', 'raster-opacity', k * NIGHTLIGHTS_MAX_OPACITY);
-        map.setPaintProperty('twilight-overlay-layer', 'fill-opacity', 0.3 * (1 - tiled));
-        map.setPaintProperty('night-overlay-layer', 'fill-opacity', 0.5 * (1 - tiled));
+        if (map.getLayer('nightlights-global-layer')) {
+          map.setPaintProperty('nightlights-global-layer', 'raster-opacity',
+                               k * NIGHTLIGHTS_MAX_OPACITY);
+        }
       } catch (e) { }
     }
 
@@ -1286,6 +1377,8 @@
     // ==================== MAP LOAD ====================
     map.on('load', function () {
       mapLoaded = true;
+      startMasterTicker();
+      subscribeTick(cameraStep);
       cityMarker.addTo(map);
       applyNightBlend();
 
@@ -1425,6 +1518,7 @@
     // Particles advected through the field. Their speed is the real wind
     // speed, mapped to a constant on-screen scale, so gales visibly race and
     // calm air drifts — which a dash animation could never show.
+    var windZoomAtBuild = null;
     var windParticles = [];
     var windTickInterval = null;
     var windLastFeatureCount = -1;
@@ -1507,7 +1601,7 @@
       var baseScale = WIND_PX_PER_SEC * METERS_PER_DEGREE / pixelsPerDegree;
       var tickSeconds = WIND_TICK_MS / 1000;
 
-      var features = [];
+      var lines = [];
       for (var i = 0; i < windParticles.length; i++) {
         var p = windParticles[i];
         var w = windField.sample(p.lat, p.lon);
@@ -1534,13 +1628,7 @@
         p.lon = normalizeLon(p.lon + (w.u * dt) / (METERS_PER_DEGREE * cosLat));
         p.age++;
 
-        if (p.trail.length > 1) {
-          features.push({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: p.trail.slice() },
-            properties: { speed: p.speed }
-          });
-        }
+        if (p.trail.length > 1) lines.push(p.trail.slice());
       }
       var nowTick = performance.now();
       if (windLastTickAt) {
@@ -1548,17 +1636,31 @@
         if (windTickTimes.length > 60) windTickTimes.shift();
       }
       windLastTickAt = nowTick;
-      windLastFeatureCount = features.length;
-      map.getSource('wind').setData({ type: 'FeatureCollection', features: features });
+      windLastFeatureCount = lines.length;
+      map.getSource('wind').setData({
+        type: 'Feature',
+        geometry: { type: 'MultiLineString', coordinates: lines },
+        properties: {}
+      });
+    }
+
+    var windTickAccumulator = 0;
+
+    function windTickStep() {
+      windTickAccumulator += MASTER_TICK_MS;
+      if (windTickAccumulator < WIND_TICK_MS) return;
+      windTickAccumulator = 0;
+      windTick();
     }
 
     function startWindAnimation() {
       if (windTickInterval) return;
-      windTickInterval = createTicker(WIND_TICK_MS, windTick);
+      windTickInterval = true;
+      subscribeTick(windTickStep);
     }
 
     function stopWindAnimation() {
-      if (windTickInterval) { windTickInterval.stop(); windTickInterval = null; }
+      if (windTickInterval) { unsubscribeTick(windTickStep); windTickInterval = null; }
       windParticles = [];
     }
 
@@ -1606,12 +1708,19 @@
       if (!window.isPrimaryView) return;
 
       var now = Date.now();
-      if (now < windBackoffUntil) return;
-      if (!force && now - lastWindRequest < WIND_REQUEST_MIN_MS) return;
-      lastWindRequest = now;
+      var isGlobal = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
+
+      // Only the viewport path spends Open-Meteo quota. The global field comes
+      // from GFS via Swift, which caches it for hours, so throttling that was
+      // pure harm: enabling wind within the window left it with no field at
+      // all, which looked like frozen particles.
+      if (!isGlobal) {
+        if (now < windBackoffUntil) return;
+        if (!force && now - lastWindRequest < WIND_REQUEST_MIN_MS) return;
+        lastWindRequest = now;
+      }
 
       var south, west, north, east, cols, rows;
-      var isGlobal = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
 
       if (isGlobal) {
         // The globe is served by NOAA GFS through Swift: a full 1-degree grid,
