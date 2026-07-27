@@ -712,6 +712,7 @@
           lastFeatureCount: windLastFeatureCount,
           flightIntervalMs: Math.round(flightRenderInterval()),
           computeMs: Math.round(windComputeMs * 10) / 10,
+          culled: windCulledCount,
           setDataMs: Math.round(windSetDataMs * 10) / 10,
           tickIntervalMs: (function () {
             if (!windTickTimes.length) return null;
@@ -1573,6 +1574,7 @@
     var windLastFeatureCount = -1;
     var windLastError = null;
     var windComputeMs = 0;
+    var windCulledCount = 0;
     var windSetDataMs = 0;
     var windTickTimes = [];
     var windLastTickAt = 0;
@@ -1636,6 +1638,44 @@
         p.speed = 0;
     }
 
+    // On the globe roughly half the planet faces away, and near the limb the
+    // rest is edge-on. Building geometry for particles the viewer cannot see is
+    // pure waste, so they are dropped before the mesh is handed to Mapbox.
+    var cullCenterLat = 0, cullCenterLon = 0, cullGlobe = false;
+    var cullSouth = -90, cullNorth = 90, cullWest = -180, cullEast = 180;
+    var VISIBLE_ANGLE_DEG = 78;
+
+    function prepareCulling() {
+      cullGlobe = map.getZoom() < FLIGHTS_GLOBAL_ZOOM;
+      if (cullGlobe) {
+        var c = map.getCenter();
+        cullCenterLat = c.lat; cullCenterLon = c.lng;
+      } else {
+        var b = map.getBounds();
+        var padLat = (b.getNorth() - b.getSouth()) * 0.1;
+        var padLon = (b.getEast() - b.getWest()) * 0.1;
+        cullSouth = b.getSouth() - padLat; cullNorth = b.getNorth() + padLat;
+        cullWest = b.getWest() - padLon; cullEast = b.getEast() + padLon;
+      }
+    }
+
+    function isOnScreen(lat, lon) {
+      if (!cullGlobe) {
+        if (lat < cullSouth || lat > cullNorth) return false;
+        // Bounds may straddle the antimeridian, in which case west > east.
+        var lonN = normalizeLon(lon);
+        var west = normalizeLon(cullWest);
+        var east = normalizeLon(cullEast);
+        if (west <= east) return lonN >= west && lonN <= east;
+        return lonN >= west || lonN <= east;
+      }
+      // Angular distance from the point facing the viewer.
+      var dLon = (lon - cullCenterLon) * DEG;
+      var a = Math.sin(lat * DEG) * Math.sin(cullCenterLat * DEG) +
+              Math.cos(lat * DEG) * Math.cos(cullCenterLat * DEG) * Math.cos(dLon);
+      return a > Math.cos(VISIBLE_ANGLE_DEG * DEG);
+    }
+
     function windTick() {
       if (appPaused || !windEnabled || !windField || !map.getSource('wind')) return;
 
@@ -1654,6 +1694,8 @@
 
       var tickStart = performance.now();
       var lines = [];
+      var culled = 0;
+      prepareCulling();
       for (var i = 0; i < windParticles.length; i++) {
         var p = windParticles[i];
         var w = windField.sample(p.lat, p.lon);
@@ -1680,7 +1722,8 @@
         p.lon = normalizeLon(p.lon + (w.u * dt) / (METERS_PER_DEGREE * cosLat));
         p.age++;
 
-        if (p.trail.length > 1) lines.push(p.trail.slice());
+        if (p.trail.length > 1 && isOnScreen(p.lat, p.lon)) lines.push(p.trail.slice());
+        else if (p.trail.length > 1) culled++;
       }
       var nowTick = performance.now();
       if (windLastTickAt) {
@@ -1689,6 +1732,7 @@
       }
       windLastTickAt = nowTick;
       var computeMs = performance.now() - tickStart;
+      windCulledCount = culled;
       windLastFeatureCount = lines.length;
       var setDataStart = performance.now();
       map.getSource('wind').setData({

@@ -86,6 +86,19 @@ group lengths against the point count — keep that check.
 neither blend modes nor a geographic mask. The night-lights layer therefore
 stitches its own mosaic and punches the day side out of the alpha channel.
 
+## Tests
+
+`make test` (also run by every build) loads `globe.js` against a stubbed Mapbox
+and DOM, calls every entry point Swift uses, and drives the tickers. It exists
+because regex edits repeatedly deleted still-referenced code while leaving
+valid syntax, so `node --check` passed and the breakage only surfaced in use.
+
+It catches: a removed helper that is still called, a renamed or missing
+`window.*` entry point, `var x = null` shadowing a function (checked by
+asserting the camera actually moves), and a dead animation subscriber. The
+Worker stub must deliver messages — every ticker runs on one, so a silent stub
+makes the test prove nothing.
+
 ## Traps that cost hours
 
 `var x = null` placed above a `function x(){}` **silently destroys the

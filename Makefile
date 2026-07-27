@@ -21,11 +21,12 @@ SWIFT_FILES = \
 FRAMEWORKS = -framework Cocoa -framework WebKit -framework CoreLocation -framework ServiceManagement
 SWIFT_FLAGS = -target arm64-apple-macosx13.0
 
-.PHONY: all clean run install
+.PHONY: all clean run install test
 
 all: $(APP_BUNDLE)
 
 $(APP_BUNDLE): $(SWIFT_FILES) WeatherWallpaper/Web/* WeatherWallpaper/Info.plist
+	@node test/smoke.js
 	@mkdir -p $(MACOS) $(RESOURCES)/Web
 	swiftc $(SWIFT_FLAGS) $(FRAMEWORKS) -o $(MACOS)/$(APP_NAME) $(SWIFT_FILES)
 	@# Info.plist with resolved variables
@@ -48,6 +49,9 @@ $(APP_BUNDLE): $(SWIFT_FILES) WeatherWallpaper/Web/* WeatherWallpaper/Info.plist
 		--entitlements WeatherWallpaper/WeatherWallpaper.entitlements \
 		$(APP_BUNDLE)
 	@echo "Built: $(APP_BUNDLE)"
+
+test:
+	@node test/smoke.js
 
 run: $(APP_BUNDLE)
 	open $(APP_BUNDLE)
