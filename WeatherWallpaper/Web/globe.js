@@ -481,6 +481,7 @@
     var nightLightsEnabled = savedFlag('night-lights', false);
     var windEnabled = savedFlag('wind-enabled', false);
     var radarStyle = localStorage.getItem('radar-style') || 'colour';
+    var cloudStyle = localStorage.getItem('cloud-style') || 'grey';
     var windDensity = parseInt(localStorage.getItem('wind-density'), 10);
     if (!windDensity || windDensity < 200) windDensity = WIND_PARTICLES;
     var flightColor = localStorage.getItem('flight-color') || palette.accent;
@@ -907,6 +908,7 @@
       if (map.getLayer('wind-layer')) {
         map.setLayoutProperty('wind-layer', 'visibility', windEnabled ? 'visible' : 'none');
       }
+      applyCloudPaint();
       ['clouds', 'temperature'].forEach(function (id) {
         var layerId = 'owm-' + id + '-layer';
         if (map.getLayer(layerId)) {
@@ -1312,7 +1314,8 @@
       }
 
       // --- OpenWeatherMap overlays (clouds, temperature) ---
-      addOwmLayer('clouds', 'clouds_new', 0.45);
+      addOwmLayer('clouds', 'clouds_new', 0.55);
+      applyCloudPaint();
       addOwmLayer('temperature', 'temp_new', 0.5);
 
       // --- Wind streamlines ---
@@ -1593,6 +1596,30 @@
 
     function owmKey() { return localStorage.getItem('owm-api-key') || ''; }
 
+    // OWM's cloud layer is cloud *cover* rendered flat white, which looks like
+    // cotton wool. Real cloud is grey and gets darker the thicker it is, so the
+    // layer is toned down and precipitation is drawn underneath it — where it
+    // rains, the cloud above reads dark.
+    var CLOUD_PAINT = {
+      white: { 'raster-opacity': 0.5, 'raster-brightness-max': 1, 'raster-contrast': 0 },
+      grey: { 'raster-opacity': 0.55, 'raster-brightness-max': 0.72, 'raster-contrast': 0.1 },
+      storm: { 'raster-opacity': 0.65, 'raster-brightness-max': 0.5, 'raster-contrast': 0.25 }
+    };
+
+    function applyCloudPaint() {
+      var paint = CLOUD_PAINT[cloudStyle] || CLOUD_PAINT.grey;
+      if (!map.getLayer('owm-clouds-layer')) return;
+      for (var key in paint) {
+        try { map.setPaintProperty('owm-clouds-layer', key, paint[key]); } catch (e) { }
+      }
+    }
+
+    window.setCloudStyle = function (style) {
+      cloudStyle = CLOUD_PAINT[style] ? style : 'grey';
+      localStorage.setItem('cloud-style', cloudStyle);
+      applyCloudPaint();
+    };
+
     // Sources are only created once a key exists; without one every tile 401s.
     function addOwmLayer(id, owmLayerName, opacity) {
       var key = owmKey();
@@ -1628,7 +1655,8 @@
         map.setLayoutProperty(layerId, 'visibility', on ? 'visible' : 'none');
       } else if (on) {
         // Key may have arrived after the style loaded.
-        addOwmLayer('clouds', 'clouds_new', 0.45);
+        addOwmLayer('clouds', 'clouds_new', 0.55);
+      applyCloudPaint();
         addOwmLayer('temperature', 'temp_new', 0.5);
       }
     }
@@ -2071,7 +2099,7 @@
         id: 'radar-layer', type: 'raster', source: 'radar',
         paint: RADAR_PAINT[radarStyle] || RADAR_PAINT.colour,
         layout: { 'visibility': weatherEnabled ? 'visible' : 'none' }
-      });
+      }, map.getLayer('owm-clouds-layer') ? 'owm-clouds-layer' : undefined);
       applyRadarPaint();
     }
 

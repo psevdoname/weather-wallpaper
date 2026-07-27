@@ -214,6 +214,9 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         if let density = d.object(forKey: "wind-density") as? Int, density > 0 {
             lines.append("localStorage.setItem('wind-density', '\(density)');")
         }
+        if let cloudStyle = d.string(forKey: "cloud-style"), !cloudStyle.isEmpty {
+            lines.append("localStorage.setItem('cloud-style', '\(cloudStyle)');")
+        }
         if let radarStyle = d.string(forKey: "radar-style"), !radarStyle.isEmpty {
             lines.append("localStorage.setItem('radar-style', '\(radarStyle)');")
         }
@@ -395,6 +398,14 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         let js = """
         localStorage.setItem('feature-\(name)', '\(enabled ? "1" : "0")');
         if (window.setMapFeature) window.setMapFeature(\(quoteJS(name)), \(enabled));
+        """
+        evaluateOnAll(js)
+    }
+
+    func injectCloudStyle(_ style: String) {
+        let js = """
+        localStorage.setItem('cloud-style', \(quoteJS(style)));
+        if (window.setCloudStyle) window.setCloudStyle(\(quoteJS(style)));
         """
         evaluateOnAll(js)
     }

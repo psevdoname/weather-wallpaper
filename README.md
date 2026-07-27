@@ -73,7 +73,8 @@ without the menu closing after each click:
 | Wind speed | m/s, km/h, mph, knots, or match the units setting |
 | Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
-| Rain look | Colour weather-map style, or dark rain-bearing cloud |
+| Cloud look | White / Grey / Storm — how heavy the cloud layer reads |
+| Rain look | Colour weather-map style, or dark, drawn beneath the clouds |
 | Wind | Live 10m wind as moving particles |
 | Wind density | Light / Medium / Dense / Very dense — the main lever on smoothness |
 | Clouds / Temperature | Global overlays (needs an OpenWeather key) |

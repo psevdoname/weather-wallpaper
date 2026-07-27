@@ -50,6 +50,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("#E64DFF", "Magenta"),
     ]
 
+    private static let cloudStyles: [(id: String, name: String)] = [
+        ("white", "White"),
+        ("grey", "Grey — realistic"),
+        ("storm", "Storm — dark and heavy"),
+    ]
+
     private static let radarStyles: [(id: String, name: String)] = [
         ("colour", "Colour — weather-map style"),
         ("dark", "Dark — rain-bearing cloud"),
@@ -155,6 +161,10 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             selected: Self.windDensities.firstIndex { $0.count == currentWindDensity } ?? 2,
             action: #selector(windDensityChanged(_:))))
         stack.addArrangedSubview(checkbox("Clouds (needs OpenWeather key)", key: "clouds-enabled", action: #selector(cloudsToggled(_:))))
+        stack.addArrangedSubview(popupRow(
+            "Cloud look", Self.cloudStyles.map(\.name),
+            selected: Self.cloudStyles.firstIndex { $0.id == currentCloudStyle } ?? 1,
+            action: #selector(cloudStyleChanged(_:))))
         stack.addArrangedSubview(checkbox("Temperature (needs OpenWeather key)", key: "temperature-enabled", action: #selector(temperatureToggled(_:))))
         stack.addArrangedSubview(checkbox("City lights at night", key: "night-lights", action: #selector(nightLightsToggled(_:))))
         stack.addArrangedSubview(checkbox("Pollen & air quality panel", key: "pollen-enabled", action: #selector(pollenToggled(_:))))
@@ -238,6 +248,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     // MARK: - Current values
 
     private var currentStyleId: String { defaults.string(forKey: "map-style") ?? "faded" }
+    private var currentCloudStyle: String { defaults.string(forKey: "cloud-style") ?? "grey" }
+
     private var currentRadarStyle: String { defaults.string(forKey: "radar-style") ?? "colour" }
 
     private var currentWindDensity: Int { defaults.object(forKey: "wind-density") as? Int ?? 2600 }
@@ -268,6 +280,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         let on = sender.state == .on
         defaults.set(on, forKey: "feature-\(key)")
         manager.injectMapFeature(key, on)
+    }
+
+    @objc private func cloudStyleChanged(_ sender: NSPopUpButton) {
+        let id = Self.cloudStyles[sender.indexOfSelectedItem].id
+        defaults.set(id, forKey: "cloud-style")
+        manager.injectCloudStyle(id)
     }
 
     @objc private func radarStyleChanged(_ sender: NSPopUpButton) {
