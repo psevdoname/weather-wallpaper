@@ -15,10 +15,10 @@ Built with MapboxGL, Swift, and WebKit. Entirely vibe-coded with Claude.
 - **Live Flights** — real-time aircraft positions from OpenSky Network
 - **Pollen & Air Quality** — Google Pollen API + Open-Meteo air quality data
 - **City Labels** — custom-styled country, state, city, and neighborhood labels
-- **Globe Spin** — smooth auto-rotation (~40s per revolution)
-- **Zoom Levels** — Globe, Country, City, and Street views
+- **Globe Spin** — smooth auto-rotation at a constant on-screen speed
+- **Zoom Levels** — eight levels from Globe to Block
 - **Search Location** — geocode any city/place and fly there
-- **Menu Bar Controls** — toggle everything from the menu bar
+- **Settings Window** — everything configurable without the menu closing after each click
 
 ## Requirements
 
@@ -56,8 +56,6 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 
 | Item | Description |
 |------|-------------|
-| Refresh Location | Re-detect current location via GPS |
-| Search Location… | Geocode a city/place and fly there |
 | Settings… | Open the settings window |
 | Refresh Location | Re-detect current location via GPS |
 | Search Location… | Geocode a city/place and fly there |
