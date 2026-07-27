@@ -82,6 +82,28 @@ reference/width/length blocks are octet-aligned relative to each other, and
 GRIB stores negatives as sign-and-magnitude. The decoder self-checks by summing
 group lengths against the point count — keep that check.
 
+**Mapbox Satellite is a summer mosaic.** It is stitched from cloud-free scenes
+chosen for clarity, so Chukotka and Alaska are green in January and the poles
+carry no ice. NASA GIBS publishes daily true-colour imagery instead (the
+`today` style), which shows the real snow line, sea ice and that day's cloud —
+at 250m, up to z9, daylit side only.
+
+**RainViewer ignores its colour-scheme parameter.** Every scheme returns a
+byte-identical tile (verified by md5), so recolouring precipitation has to be
+done with raster paint properties: `raster-brightness-max`, `raster-saturation`,
+`raster-contrast`.
+
+**Cloud cover carries no thickness.** OWM's clouds layer is a percentage
+rendered flat white; nothing in it says whether it is raining. Dark rain cloud
+comes from drawing precipitation *underneath* a toned-down cloud layer.
+
+**Converging meridians break particle advection near the poles.** A constant
+ground speed becomes x5.8 the longitude step at 80 degrees, x11.5 at 85, x57 at
+89. The visible symptom was a flickering ring: steps beyond 180 degrees tripped
+the antimeridian check and cleared each trail every tick. Clamp the per-tick
+step (4 degrees leaves everything below 80 untouched) rather than cutting off
+high latitudes, which removes the whole Arctic.
+
 **Black Marble tiles are opaque RGB with no alpha**, and raster layers have
 neither blend modes nor a geographic mask. The night-lights layer therefore
 stitches its own mosaic and punches the day side out of the alpha channel.
@@ -131,6 +153,10 @@ globe, mask and all.
 function**: hoisting defines the function first, then the assignment overwrites
 it. This put `null` in the tick subscriber list, the loop's `try/catch` ate the
 TypeError, and the diagnostic printed it as subscribed because `null === null`.
+
+`make` alone is not enough to test a change: the Dock and Spotlight launch
+`/Applications/WeatherWallpaper.app`. Use `make install`. Hours were spent
+measuring a build the user was never running.
 
 In shell, `grep -c` exits **1** when it counts zero, so `grep -c foo file && make`
 silently skips the build. Several measurements were taken against a stale bundle
