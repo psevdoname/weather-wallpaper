@@ -21,7 +21,7 @@ SWIFT_FILES = \
 FRAMEWORKS = -framework Cocoa -framework WebKit -framework CoreLocation -framework ServiceManagement
 SWIFT_FLAGS = -target arm64-apple-macosx13.0
 
-.PHONY: all clean run
+.PHONY: all clean run install
 
 all: $(APP_BUNDLE)
 
@@ -54,3 +54,19 @@ run: $(APP_BUNDLE)
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+# Replace the copy in /Applications, which is what Spotlight and the Dock
+# launch. Building alone leaves that copy stale, which silently hides every
+# change behind an old binary.
+install: $(APP_BUNDLE)
+	@pkill -x $(APP_NAME) 2>/dev/null || true
+	@sleep 1
+	@rm -rf /Applications/$(APP_NAME).app
+	@ditto $(APP_BUNDLE) /Applications/$(APP_NAME).app
+	@xattr -d com.apple.FinderInfo /Applications/$(APP_NAME).app 2>/dev/null || true
+	@codesign --force --sign - \
+		--identifier com.weatherwallpaper.app \
+		--entitlements WeatherWallpaper/WeatherWallpaper.entitlements \
+		/Applications/$(APP_NAME).app
+	@echo "Installed: /Applications/$(APP_NAME).app"
+	@open /Applications/$(APP_NAME).app

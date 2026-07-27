@@ -22,6 +22,18 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         createWindowsForAllScreens()
     }
 
+    /// NSLog is invisible for an ad-hoc signed bundle, so native diagnostics go
+    /// to a file next to the page's own dump.
+    static func windLog(_ message: String) {
+        let path = NSString(string: "~/Library/Logs/WeatherWallpaper-wind.log").expandingTildeInPath
+        let line = "\(Date().ISO8601Format()) \(message)\n"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close()
+        } else {
+            try? line.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
+
     private static func currentScreenSignature() -> String {
         NSScreen.screens.map { NSStringFromRect($0.frame) }.joined(separator: "|")
     }
@@ -242,7 +254,10 @@ class DesktopWindowManager: NSObject, WKScriptMessageHandler {
         // The global wind field comes from NOAA GFS, which sends no CORS
         // headers and ships GRIB2 — both reasons to fetch it natively.
         if type == "requestGlobalWind" {
+            Self.windLog("request received")
             windService.field { [weak self] grid in
+                Self.windLog(grid == nil ? "WindService returned nil"
+                                         : "grid \(grid!.cols)x\(grid!.rows) from \(grid!.cycle)")
                 guard let grid, let payload = WindService.json(for: grid) else { return }
                 DispatchQueue.main.async {
                     self?.evaluateOnAll("if (window.receiveWind) window.receiveWind(\(payload));")

@@ -55,6 +55,7 @@ final class WindService {
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            DesktopWindowManager.windLog("cycle -\(attempt): status \(status), \(data?.count ?? 0) bytes")
             guard let data, status == 200, data.count > 1000,
                   data.prefix(4) == Data("GRIB".utf8) else {
                 NSLog("[Wind] cycle -\(attempt) unavailable (status \(status), \(error?.localizedDescription ?? "no error"))")
@@ -63,6 +64,7 @@ final class WindService {
             }
 
             let fields = GribDecoder.decode(data)
+            DesktopWindowManager.windLog("decoded \(fields.count) fields")
             // Category 2 is momentum; 2 = u-component, 3 = v-component.
             guard let uField = fields.first(where: { $0.parameterCategory == 2 && $0.parameterNumber == 2 }),
                   let vField = fields.first(where: { $0.parameterCategory == 2 && $0.parameterNumber == 3 }),

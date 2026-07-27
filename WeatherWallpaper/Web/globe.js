@@ -118,6 +118,8 @@
   // Swift instead, which is free and far denser.
   var WIND_GRID_COLS = 14;
   var WIND_GRID_ROWS = 10;
+  // Locations per request, to keep the URL within a safe length.
+  var WIND_CHUNK = 280;
   // Many thin short strokes read as a flowing field; fewer thick long ones
   // read as sausages.
   var WIND_PARTICLES = 2600;
@@ -733,6 +735,11 @@
             return buckets;
           })(),
           lastError: windLastError,
+          loadHandlerError: loadHandlerError,
+          fetchWindCalls: fetchWindCalls,
+          globalWindPosts: globalWindPosts,
+          mapLoaded: mapLoaded,
+          isPrimary: window.isPrimaryView,
           source: windFieldSource,
           urlLength: windLastUrlLength,
           zoom: map.getZoom()
@@ -848,6 +855,9 @@
     var spinFrameCount = 0;
     var spinStartedAt = 0;
     var diagnosticsRepeat = null;
+    var loadHandlerError = null;
+    var fetchWindCalls = 0;
+    var globalWindPosts = 0;
     var renderCount = 0;
     var renderCountStart = performance.now();
     var spinLonTravelled = 0;
@@ -1397,6 +1407,7 @@
 
     // ==================== MAP LOAD ====================
     map.on('load', function () {
+      try {
       mapLoaded = true;
       startMasterTicker();
       subscribeTick(cameraStep);
@@ -1411,6 +1422,10 @@
 
       // Start background tasks (flights, radar, terminator)
       startBackgroundTasks();
+      } catch (e) {
+        loadHandlerError = (e && e.message) || String(e);
+        console.error('[Load]', loadHandlerError);
+      }
     });
 
     // --- Flight fetching (primary view asks Swift; Swift answers every view) ---
@@ -1745,6 +1760,7 @@
     }
 
     function fetchWind(force) {
+      fetchWindCalls++;
       if (!mapLoaded || appPaused || !windEnabled) return;
       if (!window.isPrimaryView) return;
 
@@ -1771,6 +1787,7 @@
           webkit.messageHandlers.dataRelay.postMessage({
             type: 'requestGlobalWind', json: '{}'
           });
+          globalWindPosts++;
         } catch (e) { windLastError = (e && e.message) || String(e); }
         return;
       }
