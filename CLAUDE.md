@@ -121,6 +121,12 @@ everything.
 
 ## Traps that cost hours
 
+When a mechanism is replaced, delete the one it replaced. The night lights were
+switched from a global crossfade to a per-pixel terminator mask in the image's
+alpha channel, but the crossfade stayed — so layer opacity still followed the
+sun at the map centre, and a daylit centre hid the lights across the whole
+globe, mask and all.
+
 `var x = null` placed above a `function x(){}` **silently destroys the
 function**: hoisting defines the function first, then the assignment overwrites
 it. This put `null` in the tick subscriber list, the loop's `try/catch` ate the

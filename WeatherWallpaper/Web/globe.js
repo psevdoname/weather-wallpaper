@@ -786,6 +786,10 @@
           flightIntervalMs: Math.round(flightRenderInterval()),
           computeMs: Math.round(windComputeMs * 10) / 10,
           culled: windCulledCount,
+          nightLightsOpacity: (function () {
+            try { return map.getPaintProperty('nightlights-global-layer', 'raster-opacity'); }
+            catch (e) { return null; }
+          })(),
           setDataMs: Math.round(windSetDataMs * 10) / 10,
           tickIntervalMs: (function () {
             if (!windTickTimes.length) return null;
@@ -1442,21 +1446,16 @@
     // by solar elevation at the centre — correct at that scale, where the whole
     // viewport shares roughly one local time. The darkening fills are backed off
     // by the same amount so the two don't stack into pure black.
+    // The terminator lives in the image's alpha channel, computed per pixel, so
+    // the layer opacity must stay constant. It used to be scaled by the sun's
+    // elevation at the map centre as well — a leftover from when the imagery
+    // was unmasked — which meant that with a daylit centre the lights vanished
+    // everywhere, including the half of the globe that was actually in night.
     function applyNightBlend() {
       if (!map.getLayer('nightlights-global-layer')) return;
-      var center = map.getCenter();
-      var elevation = getSunElevation(center.lat, center.lng);
-      // 0 at sunset, 1 once the sun is 12° below the horizon (nautical twilight).
-      var k = 0;
-      if (nightLightsEnabled) {
-        k = -elevation / 12;
-        if (k < 0) k = 0; if (k > 1) k = 1;
-      }
       try {
-        if (map.getLayer('nightlights-global-layer')) {
-          map.setPaintProperty('nightlights-global-layer', 'raster-opacity',
-                               k * NIGHTLIGHTS_MAX_OPACITY);
-        }
+        map.setPaintProperty('nightlights-global-layer', 'raster-opacity',
+                             nightLightsEnabled ? NIGHTLIGHTS_MAX_OPACITY : 0);
       } catch (e) { }
     }
 
