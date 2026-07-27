@@ -46,6 +46,14 @@ config property appears to be ignored, check the version before debugging code.
 never focused, so WebKit treats the page as hidden. Plain timers get ~7-18Hz; a
 timer inside a Worker does better. Never drive animation from rAF here.
 
+**Animate the camera yourself.** Mapbox drives `flyTo`/`easeTo` on rAF too, so
+they crawl: a 2s flight was measured covering 0.76 of 26 degrees. Interpolate
+and apply with `jumpTo` from the shared ticker instead.
+
+**One long-lived ticker, not one per animation.** Workers created on demand
+stopped delivering after a second or two; the wind ticker, created once at load
+and never stopped, ran forever. Everything subscribes to a single ticker.
+
 **Clamp long frame gaps, don't discard them.** Throttling makes multi-hundred-ms
 gaps routine. Dropping them lost two thirds of elapsed time and the globe
 crawled at a third of its requested speed.
@@ -77,6 +85,20 @@ group lengths against the point count — keep that check.
 **Black Marble tiles are opaque RGB with no alpha**, and raster layers have
 neither blend modes nor a geographic mask. The night-lights layer therefore
 stitches its own mosaic and punches the day side out of the alpha channel.
+
+## Traps that cost hours
+
+`var x = null` placed above a `function x(){}` **silently destroys the
+function**: hoisting defines the function first, then the assignment overwrites
+it. This put `null` in the tick subscriber list, the loop's `try/catch` ate the
+TypeError, and the diagnostic printed it as subscribed because `null === null`.
+
+In shell, `grep -c` exits **1** when it counts zero, so `grep -c foo file && make`
+silently skips the build. Several measurements were taken against a stale bundle
+because of this.
+
+CPU numbers here vary by ±30% between identical runs. Do not tune against a
+single measurement; only trust differences that are large and repeatable.
 
 ## Measuring performance
 
