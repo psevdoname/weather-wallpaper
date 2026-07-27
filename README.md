@@ -76,6 +76,7 @@ without the menu closing after each click:
 | Flights | Live aircraft positions, with a configurable colour |
 | Weather radar | Precipitation overlay (RainViewer) |
 | Wind | Live 10m wind as moving particles |
+| Wind density | Light / Medium / Dense / Very dense — the main lever on smoothness |
 | Clouds / Temperature | Global overlays (needs an OpenWeather key) |
 | City lights at night | NASA Black Marble on the night side |
 | Pollen & air quality | Bottom bar switches to the allergy view |

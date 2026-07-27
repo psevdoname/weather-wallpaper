@@ -57,6 +57,14 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         ("kn", "knots"),
     ]
 
+    /// Particle count dominates smoothness, so it is a user choice.
+    private static let windDensities: [(count: Int, name: String)] = [
+        (900, "Light — smoothest"),
+        (1800, "Medium"),
+        (2600, "Dense"),
+        (4000, "Very dense — may stutter"),
+    ]
+
     private static let spinSpeeds: [(value: Double, name: String)] = [
         (13, "Slow"), (26, "Normal"), (52, "Fast"),
     ]
@@ -132,6 +140,10 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             action: #selector(flightColorChanged(_:))))
         stack.addArrangedSubview(checkbox("Weather radar", key: "radar-enabled", action: #selector(radarToggled(_:))))
         stack.addArrangedSubview(checkbox("Wind", key: "wind-enabled", action: #selector(windToggled(_:))))
+        stack.addArrangedSubview(popupRow(
+            "Wind density", Self.windDensities.map(\.name),
+            selected: Self.windDensities.firstIndex { $0.count == currentWindDensity } ?? 2,
+            action: #selector(windDensityChanged(_:))))
         stack.addArrangedSubview(checkbox("Clouds (needs OpenWeather key)", key: "clouds-enabled", action: #selector(cloudsToggled(_:))))
         stack.addArrangedSubview(checkbox("Temperature (needs OpenWeather key)", key: "temperature-enabled", action: #selector(temperatureToggled(_:))))
         stack.addArrangedSubview(checkbox("City lights at night", key: "night-lights", action: #selector(nightLightsToggled(_:))))
@@ -216,6 +228,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     // MARK: - Current values
 
     private var currentStyleId: String { defaults.string(forKey: "map-style") ?? "faded" }
+    private var currentWindDensity: Int { defaults.object(forKey: "wind-density") as? Int ?? 2600 }
+
     private var currentWindUnit: String { defaults.string(forKey: "wind-unit") ?? "auto" }
 
     private var currentFlightColor: String { defaults.string(forKey: "flight-color") ?? "#C9A84C" }
@@ -242,6 +256,12 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         let on = sender.state == .on
         defaults.set(on, forKey: "feature-\(key)")
         manager.injectMapFeature(key, on)
+    }
+
+    @objc private func windDensityChanged(_ sender: NSPopUpButton) {
+        let count = Self.windDensities[sender.indexOfSelectedItem].count
+        defaults.set(count, forKey: "wind-density")
+        manager.injectWindDensity(count)
     }
 
     @objc private func windUnitChanged(_ sender: NSPopUpButton) {

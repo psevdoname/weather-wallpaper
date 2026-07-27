@@ -120,7 +120,7 @@
   var WIND_GRID_ROWS = 10;
   // Many thin short strokes read as a flowing field; fewer thick long ones
   // read as sausages.
-  var WIND_PARTICLES = 3600;
+  var WIND_PARTICLES = 2600;
   var WIND_TRAIL = 6;               // positions kept per particle
   var WIND_TICK_MS = 90;
   var WIND_MAX_AGE = 110;           // ticks before a particle is reseeded, so
@@ -435,6 +435,8 @@
     if (Number.isNaN(spinPixelsPerSec)) spinPixelsPerSec = 26;
     var nightLightsEnabled = savedFlag('night-lights', false);
     var windEnabled = savedFlag('wind-enabled', false);
+    var windDensity = parseInt(localStorage.getItem('wind-density'), 10);
+    if (!windDensity || windDensity < 200) windDensity = WIND_PARTICLES;
     var flightColor = localStorage.getItem('flight-color') || palette.accent;
     var owmEnabled = {
       clouds: savedFlag('clouds-enabled', false),
@@ -442,9 +444,23 @@
     };
     var windField = null;
     var radarTileUrl = null;
-    // Each reposition costs several map renders, so this is deliberately slow:
-    // at cruise speed a second of travel is sub-pixel on the globe.
-    var FLIGHT_RENDER_MS = 1000;
+    // Repositioning is paced by how far aircraft actually move on screen. At
+    // cruise (~0.00225 deg/s) that is 0.018 px/s on the globe — 83 seconds per
+    // 1.5px — so updating once a second there was ~80x more often than any eye
+    // could tell, while each update costs several map renders.
+    var FLIGHT_DEG_PER_SEC = 0.00225;
+    var FLIGHT_TARGET_PX = 1.5;
+    var FLIGHT_MIN_MS = 400;
+    var FLIGHT_MAX_MS = 20000;
+
+    function flightRenderInterval() {
+      var pixelsPerDegree = 512 * Math.pow(2, map.getZoom()) / 360;
+      var pixelsPerSecond = FLIGHT_DEG_PER_SEC * pixelsPerDegree;
+      var ms = (FLIGHT_TARGET_PX / pixelsPerSecond) * 1000;
+      if (ms < FLIGHT_MIN_MS) ms = FLIGHT_MIN_MS;
+      if (ms > FLIGHT_MAX_MS) ms = FLIGHT_MAX_MS;
+      return ms;
+    }
 
     // Background refresh cadence. Nothing here is a paid API: Open-Meteo,
     // RainViewer and NASA GIBS are free and keyless, OpenSky is free with a
@@ -692,6 +708,9 @@
           layerVisibility: map.getLayer('wind-layer')
             ? map.getLayoutProperty('wind-layer', 'visibility') : null,
           lastFeatureCount: windLastFeatureCount,
+          flightIntervalMs: Math.round(flightRenderInterval()),
+          computeMs: Math.round(windComputeMs * 10) / 10,
+          setDataMs: Math.round(windSetDataMs * 10) / 10,
           tickIntervalMs: (function () {
             if (!windTickTimes.length) return null;
             var sum = 0, max = 0;
@@ -972,14 +991,14 @@
       if (paused) {
         // Stop animations
         stopSpinLoop();
-        if (flightAnimInterval) { clearInterval(flightAnimInterval); flightAnimInterval = null; }
+        stopFlightAnimation();
         stopWindAnimation();
         // Stop fetching
         stopBackgroundTasks();
       } else {
         // Resume animations if they were enabled
         if (spinning) startSpinLoop();
-        if (flightsEnabled && !flightAnimInterval) { startFlightAnimation(); }
+        if (flightsEnabled) startFlightAnimation();
         if (windEnabled) startWindAnimation();
         // Resume fetching
         if (mapLoaded) startBackgroundTasks();
@@ -1074,7 +1093,7 @@
           fetchFlights(true);
           startFlightAnimation();
         } else {
-          if (flightAnimInterval) { clearInterval(flightAnimInterval); flightAnimInterval = null; }
+          stopFlightAnimation();
           flightStore = [];
           renderFlightPositions();
           // Timers keep running for the terminator even if flights are off.
@@ -1226,8 +1245,10 @@
           type: 'line',
           source: 'wind',
           layout: {
-            'line-cap': 'round',
-            'line-join': 'round',
+            // round caps/joins are generated per line; with thousands of them
+            // that cost ~5fps of spin, and the gradient hides the difference.
+            'line-cap': 'butt',
+            'line-join': 'miter',
             'visibility': windEnabled ? 'visible' : 'none'
           },
           paint: {
@@ -1460,10 +1481,23 @@
       if (src) src.setData({ type: 'FeatureCollection', features: features });
     }
 
+    var flightAccumulator = 0;
+
+    function flightTickStep() {
+      flightAccumulator += MASTER_TICK_MS;
+      if (flightAccumulator < flightRenderInterval()) return;
+      flightAccumulator = 0;
+      renderFlightPositions();
+    }
+
     function startFlightAnimation() {
-      if (!flightAnimInterval) {
-        flightAnimInterval = setInterval(renderFlightPositions, FLIGHT_RENDER_MS);
-      }
+      if (flightAnimInterval) return;
+      flightAnimInterval = true;
+      subscribeTick(flightTickStep);
+    }
+
+    function stopFlightAnimation() {
+      if (flightAnimInterval) { unsubscribeTick(flightTickStep); flightAnimInterval = null; }
     }
 
     // --- OpenWeatherMap overlays ---
@@ -1523,6 +1557,8 @@
     var windTickInterval = null;
     var windLastFeatureCount = -1;
     var windLastError = null;
+    var windComputeMs = 0;
+    var windSetDataMs = 0;
     var windTickTimes = [];
     var windLastTickAt = 0;
     var windFieldSource = null;
@@ -1589,7 +1625,7 @@
       if (appPaused || !windEnabled || !windField || !map.getSource('wind')) return;
 
 
-      while (windParticles.length < WIND_PARTICLES) {
+      while (windParticles.length < windDensity) {
         var fresh = {};
         seedParticle(fresh);
         windParticles.push(fresh);
@@ -1601,6 +1637,7 @@
       var baseScale = WIND_PX_PER_SEC * METERS_PER_DEGREE / pixelsPerDegree;
       var tickSeconds = WIND_TICK_MS / 1000;
 
+      var tickStart = performance.now();
       var lines = [];
       for (var i = 0; i < windParticles.length; i++) {
         var p = windParticles[i];
@@ -1636,12 +1673,16 @@
         if (windTickTimes.length > 60) windTickTimes.shift();
       }
       windLastTickAt = nowTick;
+      var computeMs = performance.now() - tickStart;
       windLastFeatureCount = lines.length;
+      var setDataStart = performance.now();
       map.getSource('wind').setData({
         type: 'Feature',
         geometry: { type: 'MultiLineString', coordinates: lines },
         properties: {}
       });
+      windComputeMs = computeMs;
+      windSetDataMs = performance.now() - setDataStart;
     }
 
     var windTickAccumulator = 0;
@@ -1803,6 +1844,14 @@
       windZoomAtBuild = map.getZoom();
       for (var i = 0; i < windParticles.length; i++) seedParticle(windParticles[i]);
     }
+
+    // The particle count is the single biggest lever on smoothness — each line
+    // is meshed separately — so it is exposed rather than guessed at.
+    window.setWindDensity = function (count) {
+      windDensity = count;
+      localStorage.setItem('wind-density', String(count));
+      if (windParticles.length > windDensity) windParticles.length = windDensity;
+    };
 
     window.setWindEnabled = function (on) {
       windEnabled = on;
